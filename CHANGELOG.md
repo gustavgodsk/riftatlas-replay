@@ -4,6 +4,17 @@ What changed in each released version, in the words a player would use. The
 Chrome Web Store has no changelog field, so this is the record, and the source
 for the "What's new" block in the listing description.
 
+## 0.6.3.0 (fork build)
+
+- **Send finished matches straight to the site.** Opt-in: paste your site's
+  URL and a token (created on its Settings page) into the popup's "Send to
+  site" section, then press **Send to site** on any recording, or turn on
+  "Send automatically" to have it happen the moment a match finishes. Never
+  sends anything unless you set this up - this is a fork-only feature and does
+  not change what the extension does otherwise. A failed send retries a few
+  times on its own (5s, 30s, 2min) and can always be retried by hand
+  afterwards; the popup shows sent / failed / not-sent for each recording.
+
 ## 0.6.2.3 (fork build)
 
 - **Alt+H toggles the note box.** Press Alt+H (or click the pill) again to hide

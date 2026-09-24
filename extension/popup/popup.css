@@ -82,3 +82,28 @@ button.watch:hover { background: #ecd190; border-color: #ecd190; }
 button.danger-solid { color: #0b1017; background: #ff7b7b; border-color: #ff7b7b;
   font-weight: 600; }
 button.danger-solid:hover { background: #ff9d9d; border-color: #ff9d9d; }
+
+/* Send to site settings (#29). */
+#upload-settings { margin: 0 0 10px; border: 1px solid #24313f; border-radius: 6px;
+  padding: 7px 9px; background: #121a24; }
+#upload-settings summary { cursor: pointer; font-weight: 600; color: #9fb0c2;
+  font-size: 12px; }
+#upload-settings summary:hover { color: #dbe7f3; }
+#upload-settings .hint { color: #7d8fa2; font-size: 11px; margin: 7px 0; }
+#upload-settings label { display: block; font-size: 11px; color: #8698ab;
+  margin: 7px 0 0; }
+#upload-settings label.checkbox { display: flex; align-items: center; gap: 6px;
+  color: #9fb0c2; }
+#upload-settings input[type=url], #upload-settings input[type=password] {
+  width: 100%; box-sizing: border-box; margin-top: 3px; padding: 5px 8px;
+  font: inherit; color: #dbe7f3; background: #0d141c; border: 1px solid #24313f;
+  border-radius: 4px; }
+#upload-settings input:focus { outline: none; border-color: #74efff; }
+#upload-settings .row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+#upload-settings-status { color: #7ed98a; font-size: 11px; }
+
+/* Per-recording send status, alongside Export / Rebuild / Delete. */
+.tag.sent { color: #7ed98a; border-color: rgba(126,217,138,.4); }
+.tag.sent[href] { text-decoration: none; cursor: pointer; }
+.tag.sent[href]:hover { border-color: #7ed98a; }
+.tag.upload-failed { color: #ff9d6b; border-color: rgba(255,157,107,.4); cursor: help; }
