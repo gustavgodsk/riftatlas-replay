@@ -14,6 +14,8 @@ for the "What's new" block in the listing description.
   not change what the extension does otherwise. A failed send retries a few
   times on its own (5s, 30s, 2min) and can always be retried by hand
   afterwards; the popup shows sent / failed / not-sent for each recording.
+- **Fixed: the popup no longer shows two scrollbars.** Only the recordings
+  list scrolls now; the popup itself never does.
 
 ## 0.6.2.3 (fork build)
 

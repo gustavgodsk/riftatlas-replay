@@ -1,30 +1,36 @@
 :root { color-scheme: dark; }
 /* Border-box, or the padding pushes the card past the popup's own width and
-   the primary button gets clipped off the right edge. */
-body { width: 400px; box-sizing: border-box; margin: 0; padding: 10px 12px 12px;
+   the primary button gets clipped off the right edge. Flex column + capped
+   height + hidden overflow so only #list scrolls: Chrome caps a popup at
+   600px tall, and if everything above the list plus the list's own scroll
+   height exceeds that, the body would scroll too, giving two scrollbars. */
+body { width: 400px; max-height: 600px; box-sizing: border-box; margin: 0;
+  padding: 10px 12px 12px; display: flex; flex-direction: column; overflow: hidden;
   background: #0b1017; color: #dbe7f3;
   font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; }
-header { display: flex; align-items: center; gap: 10px; }
+header { flex: none; display: flex; align-items: center; gap: 10px; }
 header strong { color: #d8b76e; letter-spacing: .05em; }
 #version { color: #5f7186; font-size: 10.5px; font-variant-numeric: tabular-nums; }
 header button { margin-left: auto; }
 button { font: inherit; color: inherit; background: #121a24; border: 1px solid #24313f;
   border-radius: 4px; padding: 3px 8px; cursor: pointer; }
 button:hover { border-color: #74efff; }
-#note { color: #8698ab; font-size: 11.5px; margin: 6px 0 8px; }
-#tools { display: flex; gap: 6px; margin: 0 0 10px; }
+#note { flex: none; color: #8698ab; font-size: 11.5px; margin: 6px 0 8px; }
+#tools { flex: none; display: flex; gap: 6px; margin: 0 0 10px; }
 #tools button { font-size: 11.5px; }
 
-#search { width: 100%; box-sizing: border-box; margin: 0 0 8px; padding: 5px 8px;
+#search { flex: none; width: 100%; box-sizing: border-box; margin: 0 0 8px; padding: 5px 8px;
   font: inherit; color: #dbe7f3; background: #0d141c; border: 1px solid #24313f;
   border-radius: 4px; }
 #search:focus { outline: none; border-color: #74efff; }
 #search::placeholder { color: #6b7d90; }
-#count { margin: 0 0 7px; color: #8698ab; font-size: 11px; }
+#count { flex: none; margin: 0 0 7px; color: #8698ab; font-size: 11px; }
 
-/* A long history scrolls rather than growing the popup past its limit. */
+/* The list is the only thing that scrolls: it grows to fill whatever room is
+   left under the header/tools/details/search, and shrinks below its content
+   height instead of forcing the body to grow past 600px. */
 ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px;
-  max-height: 440px; overflow-y: auto; }
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 li { border: 1px solid #24313f; border-radius: 6px; padding: 9px; background: #121a24; }
 li.empty { color: #8698ab; text-align: center; background: none; border-style: dashed; }
 
@@ -84,7 +90,7 @@ button.danger-solid { color: #0b1017; background: #ff7b7b; border-color: #ff7b7b
 button.danger-solid:hover { background: #ff9d9d; border-color: #ff9d9d; }
 
 /* Send to site settings (#29). */
-#upload-settings { margin: 0 0 10px; border: 1px solid #24313f; border-radius: 6px;
+#upload-settings { flex: none; margin: 0 0 10px; border: 1px solid #24313f; border-radius: 6px;
   padding: 7px 9px; background: #121a24; }
 #upload-settings summary { cursor: pointer; font-weight: 600; color: #9fb0c2;
   font-size: 12px; }
