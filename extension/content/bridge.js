@@ -155,7 +155,7 @@ function failPendingNotes(error) {
   for (let i = queue.length - 1; i >= 0; i--) if (queue[i].kind === 'note') queue.splice(i, 1);
 }
 
-function enqueueNote(text, seqAtOpen) {
+function enqueueNote(text, seqAtOpen, { pinned = false } = {}) {
   if (!chrome.runtime?.id) return Promise.reject(new Error('extension reloaded, reload the page'));
   if (!lastMatch) return Promise.resolve({ ok: false, error: 'no match yet' });
   const note = {
@@ -166,6 +166,7 @@ function enqueueNote(text, seqAtOpen) {
     at: Date.now(),
     sequence: Number.isInteger(seqAtOpen) ? seqAtOpen : null,
     id: crypto.randomUUID(),
+    pinned: pinned === true,
   };
   const answer = new Promise((resolve) => pendingNotes.set(note.id, { resolve }));
   queue.push(note);

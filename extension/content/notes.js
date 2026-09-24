@@ -6,6 +6,9 @@
  * the bridge (content/bridge.js, same isolated world), which queues it behind
  * the frames already on their way to the worker.
  *
+ * Alt+P while the box is open (or the pin toggle in the box) marks the note as
+ * pinned; it starts unpinned every time the box opens.
+ *
  * Everything lives in a closed shadow root, and every key pressed inside it
  * stops there, so typing a note never reaches the game.
  */
@@ -30,13 +33,17 @@
     textarea { box-sizing: border-box; width: 100%; min-height: 28px; max-height: 120px; resize: vertical;
       background: rgba(0,0,0,.35); color: #fff; border: 1px solid rgba(255,255,255,.2);
       border-radius: 4px; padding: 4px 6px; font: inherit; outline: none; }
-    .meta { margin-top: 4px; font-size: 11px; color: #aaa; }
+    .row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+    .meta { font-size: 11px; color: #aaa; }
+    .pin { margin-left: auto; font-size: 11px; color: #888; cursor: pointer; user-select: none;
+      padding: 0 6px; border-radius: 8px; border: 1px solid rgba(255,255,255,.15); }
+    .pin.on { color: #ffd54f; border-color: rgba(255,213,79,.6); background: rgba(255,213,79,.12); }
     .err { color: #ff8a80; }
     .toast { position: fixed; left: 12px; bottom: 44px; z-index: 2147483647; padding: 4px 10px;
       border-radius: 12px; background: rgba(20,60,30,.9); color: #dfd; font: 12px/1.4 system-ui, sans-serif; }
   `;
 
-  let host, pill, box, input, meta, toast, seqAtOpen = null, saving = false, toastTimer = 0;
+  let host, pill, box, input, meta, pinEl, toast, seqAtOpen = null, pinned = false, saving = false, toastTimer = 0;
 
   const ready = () => {
     const s = api()?.getState();
@@ -49,21 +56,25 @@
     const root = host.attachShadow({ mode: 'closed' });
     root.innerHTML = `<style>${CSS}</style>
       <div class="pill off" title="no match yet">&#9998; note</div>
-      <div class="box" hidden><textarea rows="1" maxlength="${MAX}" placeholder="note (Enter saves, Esc cancels)"></textarea><div class="meta"></div></div>
+      <div class="box" hidden><textarea rows="1" maxlength="${MAX}" placeholder="note (Enter saves, Esc cancels, Alt+P pins)"></textarea><div class="row"><div class="meta"></div><div class="pin" title="pin this note (Alt+P)">&#128204; pin</div></div></div>
       <div class="toast" hidden></div>`;
     pill = root.querySelector('.pill');
     box = root.querySelector('.box');
     input = root.querySelector('textarea');
     meta = root.querySelector('.meta');
+    pinEl = root.querySelector('.pin');
     toast = root.querySelector('.toast');
 
     pill.addEventListener('click', (e) => { e.stopPropagation(); if (ready()) openBox(); });
+    pinEl.addEventListener('mousedown', (e) => e.preventDefault()); // keep focus in the textarea
+    pinEl.addEventListener('click', (e) => { e.stopPropagation(); setPinned(!pinned); input.focus(); });
     // Nothing typed in the overlay may reach the game.
     for (const type of ['keydown', 'keyup', 'keypress']) {
       host.addEventListener(type, (e) => e.stopPropagation());
     }
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); closeBox(); }
+      if (e.altKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyP') { e.preventDefault(); setPinned(!pinned); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeBox(); }
       else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); save(); }
     });
     document.documentElement.appendChild(host);
@@ -77,11 +88,18 @@
     pill.title = on ? 'add a note (Alt+H)' : 'no match yet';
   }
 
+  function setPinned(on) {
+    pinned = on;
+    pinEl.classList.toggle('on', on);
+    pinEl.innerHTML = on ? '&#128204; pinned' : '&#128204; pin';
+  }
+
   function openBox() {
     if (!host) mount();
     seqAtOpen = api()?.getState().lastSequence ?? null;
     meta.className = 'meta';
     meta.textContent = Number.isInteger(seqAtOpen) ? `seq ${seqAtOpen}` : 'no sequence yet';
+    setPinned(false);
     toast.hidden = true;
     box.hidden = false;
     input.focus();
@@ -104,10 +122,11 @@
     meta.className = 'meta';
     meta.textContent = 'saving...';
     try {
-      const ack = await notes.enqueueNote(text, seqAtOpen);
+      const wasPinned = pinned;
+      const ack = await notes.enqueueNote(text, seqAtOpen, { pinned: wasPinned });
       if (ack?.ok) {
         closeBox();
-        showToast(`saved · seq ${ack.sequence ?? '?'}`);
+        showToast(`saved · seq ${ack.sequence ?? '?'}${wasPinned ? ' · pinned' : ''}`);
       } else {
         showError(ack?.error ?? 'not saved');
       }

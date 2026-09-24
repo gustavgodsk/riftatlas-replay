@@ -4,6 +4,13 @@ What changed in each released version, in the words a player would use. The
 Chrome Web Store has no changelog field, so this is the record, and the source
 for the "What's new" block in the listing description.
 
+## 0.6.2.2 (fork build)
+
+- **Pinned notes.** While the note box is open, press Alt+P (or click the
+  "pin" toggle in the box) to pin the note. Every note starts unpinned. Pinned
+  notes show "pinned" in the saved toast and are exported with
+  `pinned: true`; every note in `notes[]` now carries `pinned`.
+
 ## 0.6.2.1 (fork build)
 
 - **In-game notes.** Press Alt+H during a match (or click the small "note" pill

@@ -118,7 +118,8 @@ export async function buildReplay(recordingId) {
   const chat = (await extrasFor(recordingId, 'chat')).map((r) => r.entry)
     .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   // In-game notes, in game order. Always present, empty when there are none.
-  const notes = sortNotes((await extrasFor(recordingId, 'note')).map((r) => r.note));
+  const notes = sortNotes((await extrasFor(recordingId, 'note'))
+    .map((r) => ({ ...r.note, pinned: r.note?.pinned === true })));
   const errors = new Map((await extrasFor(recordingId, 'error')).map((r) => [r.sequence, r.code]));
 
   const timeline = new Timeline();
