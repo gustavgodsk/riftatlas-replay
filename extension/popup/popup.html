@@ -12,6 +12,22 @@
   <button id="dump" title="Everything the recorder holds, for a bug report">Debug dump</button>
   <button id="unstick" title="Forget the room RiftAtlas thinks you are in, and return to the lobby. Use this if it says it cannot reconnect to your game.">Back to lobby</button>
 </div>
+<details id="upload-settings">
+  <summary>Send to site</summary>
+  <p class="hint">Opt-in. Paste the URL and a token created on your site's Settings page to
+    send finished matches there instead of downloading and uploading them by hand.</p>
+  <label>Site URL
+    <input id="site-url" type="url" placeholder="https://your-app.example.com" autocomplete="off" spellcheck="false">
+  </label>
+  <label>Token
+    <input id="site-token" type="password" placeholder="paste the token" autocomplete="off" spellcheck="false">
+  </label>
+  <label class="checkbox"><input id="auto-send" type="checkbox"> Send automatically when a match finishes</label>
+  <div class="row">
+    <button id="save-upload-settings">Save</button>
+    <span id="upload-settings-status"></span>
+  </div>
+</details>
 <input id="search" type="search" placeholder="Search room, opponent, legend, date…"
        autocomplete="off" spellcheck="false">
 <p id="count" hidden></p>

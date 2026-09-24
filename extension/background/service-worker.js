@@ -8,19 +8,25 @@
 import { onFrame, onNote, looksFinished, everyoneLeft, endsWithSocket } from './recorder.js';
 import { buildReplay } from './finalise.js';
 import { SESSIONS, COMMITS, EXTRAS, REPLAYS, all, get, put, dropRecording, commitsFor, roomOf, isEmptyRecording } from './store.js';
+import { exportJson, uploadFilename, nextUploadState } from './upload-core.js';
 
 /**
- * Build a data: URL for a download. Chunked, because spreading a large array
- * into String.fromCharCode overflows the call stack - which is exactly how the
- * first export silently did nothing at all.
+ * Build a data: URL for a download from raw JSON text. Chunked, because
+ * spreading a large array into String.fromCharCode overflows the call stack -
+ * which is exactly how the first export silently did nothing at all.
  */
-function jsonDataUrl(value) {
-  const bytes = new TextEncoder().encode(JSON.stringify(value));
+function toDataUrl(jsonText) {
+  const bytes = new TextEncoder().encode(jsonText);
   let binary = '';
   for (let i = 0; i < bytes.length; i += 0x8000) {
     binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
   }
   return 'data:application/json;base64,' + btoa(binary);
+}
+
+/** Same, for an arbitrary JSON-able value (the debug dump, which is not a replay). */
+function jsonDataUrl(value) {
+  return toDataUrl(JSON.stringify(value));
 }
 
 /** Rooms whose socket closed or whose log announced a result, awaiting finalise. */
@@ -149,6 +155,9 @@ async function finalise(recordingId, { close = true } = {}) {
       if (had || stopped) await put(SESSIONS, session);
     }
     pendingFinalise.delete(recordingId);
+    // The recording just closed for good (not an in-progress rebuild): offer
+    // it to auto-send, if it is set up and this is the first time (#29).
+    if (close) maybeAutoSend(recordingId, session).catch(() => {});
   } catch (err) {
     // Record why, and show it. A build can fail for a reason worth acting on -
     // a patch verb the reducer predates, say - and a console warning nobody
@@ -160,6 +169,92 @@ async function finalise(recordingId, { close = true } = {}) {
     } catch { /* the session is gone */ }
   }
 }
+
+// ---- Send to site (#29) --------------------------------------------------
+//
+// Opt-in, fork-only: off unless someone pastes a site URL and token into the
+// popup's settings. See upload-core.js for the pure export/filename/backoff
+// logic; everything here is the browser-only glue around it.
+
+const RETRY_ALARM_PREFIX = 'riftatlas-replay-upload-retry:';
+const retryAlarmName = (recordingId) => RETRY_ALARM_PREFIX + recordingId;
+
+async function setUpload(recordingId, upload) {
+  const session = await get(SESSIONS, recordingId);
+  if (!session) return;
+  session.upload = upload;
+  await put(SESSIONS, session);
+}
+
+/**
+ * Auto-send fires once, right after a recording closes for good - never for a
+ * live match (`close: false` rebuilds do not reach here) and never twice for
+ * the same recording (an `upload` already on the session means it has already
+ * been sent, or is already mid-retry).
+ */
+async function maybeAutoSend(recordingId, session) {
+  if (!session?.finished || session.upload) return;
+  const { siteUpload } = await chrome.storage.local.get('siteUpload');
+  if (!siteUpload?.autoSend) return;
+  uploadSession(recordingId).catch(() => {});
+}
+
+/**
+ * POST one recording's export to the configured site. `attempt` is 0 for a
+ * fresh call - auto-send, or a person pressing "Send to site" / "Retry" in
+ * the popup - and counts up for the automatic backoff retries scheduled
+ * below; see `nextUploadState` for the state machine.
+ */
+async function uploadSession(recordingId, attempt = 0) {
+  await chrome.alarms.clear(retryAlarmName(recordingId));
+
+  const { siteUpload } = await chrome.storage.local.get('siteUpload');
+  if (!siteUpload?.siteUrl || !siteUpload?.token) return { ok: false, error: 'not configured' };
+
+  // Rebuild first, always - the same rule the download path follows, so an
+  // upload is never a replay that fell behind the recording.
+  await finalise(recordingId, { close: false });
+  const [row, session] = await Promise.all([get(REPLAYS, recordingId), get(SESSIONS, recordingId)]);
+  if (!row) return { ok: false, error: 'nothing recorded for this room' };
+
+  const body = exportJson(row.replay);
+  const filename = uploadFilename(session, recordingId);
+
+  let ok = false;
+  let meta = {};
+  try {
+    const res = await fetch(`${siteUpload.siteUrl.replace(/\/+$/, '')}/api/replays`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${siteUpload.token}`,
+        'Content-Type': 'application/json',
+        'X-Replay-Filename': filename,
+      },
+      body,
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.outcome?.message || `HTTP ${res.status}`);
+    ok = true;
+    meta = { matchId: data?.outcome?.matchId ?? null, outcome: data?.outcome ?? null };
+  } catch (err) {
+    meta = { error: String(err?.message ?? err) };
+  }
+
+  const upload = { ...nextUploadState(attempt, ok, meta), at: Date.now() };
+  await setUpload(recordingId, upload);
+  if (!ok && upload.retryDelayMs != null) {
+    chrome.alarms.create(retryAlarmName(recordingId), { when: Date.now() + upload.retryDelayMs });
+  }
+  return ok ? { ok: true, upload } : { ok: false, error: upload.error, upload };
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (!alarm.name.startsWith(RETRY_ALARM_PREFIX)) return;
+  const recordingId = alarm.name.slice(RETRY_ALARM_PREFIX.length);
+  get(SESSIONS, recordingId).then((session) => {
+    uploadSession(recordingId, session?.upload?.attempts ?? 0).catch(() => {});
+  });
+});
 
 /**
  * The room whose frames we saw last. A different one means the previous match
@@ -322,6 +417,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             buildError: s.buildError ?? null,
             stoppedEarly: replay?.coverage?.stoppedAt ?? null,
             needsNewVersion: needsNewVersion(s.buildError || s.coverageStoppedEarly || ''),
+            upload: s.upload ?? null,
           };
         }));
       sendResponse(rows);
@@ -338,7 +434,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       const row = await get(REPLAYS, msg.roomCode);
       if (!row) return sendResponse({ ok: false, error: 'nothing recorded for this room' });
       // A data: URL keeps the download entirely local; no blob URL, no fetch.
-      const url = jsonDataUrl(row.replay);
+      const url = toDataUrl(exportJson(row.replay));
       chrome.downloads.download({ url, filename: `${msg.roomCode}.ratlas.json`, saveAs: true },
         () => sendResponse({ ok: !chrome.runtime.lastError, error: chrome.runtime.lastError?.message }));
       return;
@@ -355,6 +451,23 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg?.type === 'delete') {
     dropRecording(msg.roomCode).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (msg?.type === 'upload_session') {
+    // A person pressing "Send to site" or "Retry" - always attempt 0, so a
+    // manual retry gets the full backoff sequence again (#29).
+    uploadSession(msg.roomCode).then((result) => sendResponse(result));
+    return true;
+  }
+
+  if (msg?.type === 'get_upload_settings') {
+    chrome.storage.local.get('siteUpload').then(({ siteUpload }) => sendResponse(siteUpload ?? null));
+    return true;
+  }
+
+  if (msg?.type === 'set_upload_settings') {
+    chrome.storage.local.set({ siteUpload: msg.siteUpload }).then(() => sendResponse({ ok: true }));
     return true;
   }
 

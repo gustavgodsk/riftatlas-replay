@@ -51,6 +51,10 @@ echo "== in-game notes =="
 node "$ROOT/tests/notes.mjs"
 
 echo
+echo "== send to site: export string, filename, retry backoff =="
+node "$ROOT/tests/upload.mjs"
+
+echo
 echo "== the detector must not fire before the real ending =="
 node --input-type=module -e "
 import fs from 'node:fs';

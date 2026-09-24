@@ -79,6 +79,25 @@ either player, either legend, the format, and the date — so `zed`, `bertoc`,
 `bo3` and `sep` all work, and several terms narrow rather than widen
 (`zed bertoc` finds Zed games against BertoC). Escape clears it.
 
+## Send to site
+
+Opt-in, and off by default - this build can send a finished match straight to
+your own site instead of you downloading it and uploading it by hand. Nothing
+is sent unless you set this up.
+
+1. On the site, open **Settings** and create a token. Copy it - it is shown
+   once.
+2. In the popup, open **Send to site**, paste the site's URL and the token,
+   and press **Save**. Chrome will ask you to approve access to that site;
+   allow it.
+3. Optionally tick **Send automatically when a match finishes** so every
+   match goes up on its own, right after it ends. A match still being played
+   is never sent automatically.
+
+Each recording then shows a **Send to site** button, or once it has gone up, a
+**sent** badge linking to the match on your site. A failed send is retried a
+few times on its own (5s, 30s, then 2 minutes); after that, press **Retry**.
+
 ## If RiftAtlas says it can't reconnect to your game
 
 Press **Back to lobby** in the popup. Replay mode borrows the client's "which
@@ -116,13 +135,13 @@ Playback runs about a second a move, but skips quickly through repeated actions
 
 ## What it does with your data
 
-- Recordings stay in the browser. Nothing is uploaded anywhere, by anyone.
+- Recordings stay in the browser. Nothing is uploaded anywhere unless you set up **Send to site** (see above), which is off by default.
 - Auth tokens are dropped before anything is written, so an exported replay
   carries no credentials. The test suite fails the build if one ever appears.
 - A replay contains what you could see during the match: both players' names,
   the board, and your own decklist. Your opponent's hidden cards were masked by
   the server and stay masked.
-- Exporting is the only way anything leaves your machine, and only you can do it.
+- Exporting, and sending to a site you configure yourself, are the only ways anything leaves your machine - both under your control, and the second only if you turn it on.
 
 ## What it does not do
 

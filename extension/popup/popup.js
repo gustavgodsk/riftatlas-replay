@@ -28,6 +28,95 @@ document.getElementById('dump').onclick = async (e) => {
   setTimeout(() => { button.textContent = was; }, 2500);
 };
 
+// --- Send to site (#29) -----------------------------------------------------
+//
+// Settings live in chrome.storage.local (via the background, which is the
+// only place that reads them), keyed under `siteUpload`. The origin
+// permission is requested here, in this click handler, because
+// chrome.permissions.request needs a user gesture still on the call stack.
+
+const siteUrlInput = document.getElementById('site-url');
+const tokenInput = document.getElementById('site-token');
+const autoSendInput = document.getElementById('auto-send');
+const settingsStatus = document.getElementById('upload-settings-status');
+const settingsDetails = document.getElementById('upload-settings');
+
+/** The configured site, used to build the "sent" link on each row. */
+let currentSiteUrl = '';
+
+async function loadUploadSettings() {
+  const cfg = await send({ type: 'get_upload_settings' });
+  currentSiteUrl = cfg?.siteUrl ?? '';
+  siteUrlInput.value = currentSiteUrl;
+  tokenInput.value = cfg?.token ?? '';
+  autoSendInput.checked = cfg?.autoSend === true;
+}
+
+document.getElementById('save-upload-settings').onclick = async () => {
+  const siteUrl = siteUrlInput.value.trim().replace(/\/+$/, '');
+  const token = tokenInput.value.trim();
+  const autoSend = autoSendInput.checked;
+  settingsStatus.textContent = '';
+
+  if (siteUrl) {
+    let origin;
+    try { origin = new URL(siteUrl).origin; }
+    catch { settingsStatus.textContent = 'not a valid URL'; return; }
+    const granted = await chrome.permissions.request({ origins: [`${origin}/*`] });
+    if (!granted) { settingsStatus.textContent = 'permission not granted'; return; }
+  }
+
+  await send({ type: 'set_upload_settings', siteUpload: { siteUrl, token, autoSend } });
+  currentSiteUrl = siteUrl;
+  settingsStatus.textContent = 'saved';
+  setTimeout(() => { settingsStatus.textContent = ''; }, 2000);
+  render();
+};
+
+/**
+ * How that recording's send-to-site status is shown: a "Send to site" button
+ * (which opens the settings if none are saved yet), a "Retry" button with the
+ * error on hover, or a "sent" badge linking to the match.
+ */
+function uploadStatusEl(row) {
+  const el = document.createElement('div');
+  el.className = 'upload';
+  const upload = row.upload;
+
+  if (upload?.status === 'sent') {
+    const badge = tag('sent', 'sent');
+    if (currentSiteUrl && upload.matchId) {
+      const link = document.createElement('a');
+      link.href = `${currentSiteUrl}/matches/${upload.matchId}`;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.className = badge.className;
+      link.textContent = 'sent';
+      el.append(link);
+    } else {
+      el.append(badge);
+    }
+    return el;
+  }
+
+  if (upload?.status === 'failed') {
+    const badge = tag('failed', 'upload-failed');
+    badge.title = upload.error ?? 'upload failed';
+    el.append(badge);
+  }
+
+  el.append(small(upload?.status === 'failed' ? 'Retry' : 'Send to site',
+    upload?.status === 'failed' ? (upload.error ?? 'Upload failed - click to retry')
+      : 'Upload this replay to your configured site', async (e) => {
+      if (!currentSiteUrl) { settingsDetails.open = true; settingsDetails.scrollIntoView(); return; }
+      const b = e.currentTarget;
+      b.textContent = 'Sending…';
+      await send({ type: 'upload_session', roomCode: row.roomCode });
+      refresh();
+    }));
+  return el;
+}
+
 /**
  * How the match ended, in words. 'series' is the odd one: a best-of-three game
  * can be settled by both players naming the winner when the next game starts,
@@ -249,6 +338,7 @@ function render() {
       }),
       small('Delete', 'Delete this recording', () => askDelete(li, code, id), 'danger'),
     );
+    actions.append(uploadStatusEl(row));
 
     li.append(top);
     if (left) li.append(score);
@@ -307,4 +397,5 @@ search.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && search.value) { e.preventDefault(); search.value = ''; render(); }
 });
 
+loadUploadSettings();
 refresh();
