@@ -7,6 +7,7 @@
  */
 import { SESSIONS, all, get, commitsFor, extrasFor, roomOf } from './store.js';
 import { isTerminalLogEntry } from './recorder.js';
+import { sortNotes } from './notes-core.js';
 import { Timeline } from '../shared/reducer.js';
 
 const FORMAT = 'riftatlas-replay';
@@ -116,6 +117,8 @@ export async function buildReplay(recordingId) {
   const snapshots = await extrasFor(recordingId, 'snapshot');
   const chat = (await extrasFor(recordingId, 'chat')).map((r) => r.entry)
     .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+  // In-game notes, in game order. Always present, empty when there are none.
+  const notes = sortNotes((await extrasFor(recordingId, 'note')).map((r) => r.note));
   const errors = new Map((await extrasFor(recordingId, 'error')).map((r) => [r.sequence, r.code]));
 
   const timeline = new Timeline();
@@ -339,5 +342,6 @@ export async function buildReplay(recordingId) {
     commits: commits.map(({ roomCode: _ignored, ...c }) => c),
     gaps,
     chat,
+    notes,
   };
 }

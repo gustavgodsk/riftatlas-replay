@@ -5,7 +5,8 @@
  * accumulates in worker memory, so an MV3 worker termination mid-match costs
  * nothing.
  */
-import { SESSIONS, COMMITS, EXTRAS, put, get, recordingId, activeRecordingFor } from './store.js';
+import { SESSIONS, COMMITS, EXTRAS, put, get, recordingId, activeRecordingFor, noteTargetFor } from './store.js';
+import { stampNote, nextLastSequence } from './notes-core.js';
 
 /** Frame types that carry authoritative state or match context. */
 const KEEP = new Set([
@@ -40,6 +41,33 @@ export function onFrame(frame) {
   const next = queue.then(() => handleFrame(frame), () => handleFrame(frame));
   queue = next.catch(() => {});
   return next;
+}
+
+/**
+ * Store an in-game note. Chained on the same queue as frames so a note never
+ * races the session write of the frame before it.
+ *
+ * Resolves `{ok, sequence, rebuild?}`; `rebuild` names a finished recording
+ * whose replay should be rebuilt so the note is in it.
+ */
+export function onNote(note) {
+  const next = queue.then(() => handleNote(note), () => handleNote(note));
+  queue = next.catch(() => {});
+  return next;
+}
+
+async function handleNote(note) {
+  const session = await noteTargetFor(note?.roomCode);
+  if (!session) return { ok: false, error: 'no recording for this room yet' };
+  const stamped = stampNote(note, session);
+  if (stamped.error) return { ok: false, error: stamped.error };
+  await put(EXTRAS, { roomCode: session.roomCode, kind: 'note', id: stamped.id, note: stamped });
+  // Never reopen or close anything: the session record is left untouched.
+  return {
+    ok: true,
+    sequence: stamped.sequence,
+    rebuild: session.finished === true ? session.roomCode : null,
+  };
 }
 
 async function handleFrame({ data, at, socketId }) {
@@ -80,6 +108,8 @@ async function handleFrame({ data, at, socketId }) {
   }
   const roomCode = session.roomCode;   // every store write is keyed by this
   session.lastAt = at;
+  // The newest game sequence seen, so a note without one can still be placed.
+  session.lastSequence = nextLastSequence(session.lastSequence, msg.sequence);
   // Which socket is feeding this recording. A closing socket ends the match it
   // was carrying and nothing else: RiftAtlas keeps several party sockets open
   // at once, and a lobby socket closing used to end a match in progress.
