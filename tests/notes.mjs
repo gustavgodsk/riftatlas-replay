@@ -45,6 +45,10 @@ const cases = [
   [true, !!stampNote(note({ text: '   ' }), session).error, 'rejects empty text'],
   [true, !!stampNote(note({ text: 'x'.repeat(1001) }), session).error, 'rejects text over 1000 characters'],
   [false, !!stampNote(note({ text: 'x'.repeat(1000) }), session).error, 'accepts exactly 1000 characters'],
+  [false, stampNote(note(), session).pinned, 'pinned defaults to false'],
+  [true, stampNote(note({ pinned: true }), session).pinned, 'keeps pinned: true'],
+  [false, stampNote(note({ pinned: 'yes' }), session).pinned, 'coerces a non-boolean pinned to false'],
+  [false, stampNote(note({ pinned: 1 }), session).pinned, 'coerces pinned: 1 to false'],
 
   ['a,b,c,d,e', sortNotes([
     { id: 'e', sequence: null, at: 1 },
@@ -54,6 +58,10 @@ const cases = [
     { id: 'b', sequence: 9, at: 2 },
   ]).map((n) => n.id).join(','), 'orders by sequence, then time, nulls last'],
   [0, sortNotes([]).length, 'no notes: empty array'],
+  ['b:true,a:false', sortNotes([
+    { id: 'a', sequence: 5, at: 1, pinned: false },
+    { id: 'b', sequence: 2, at: 2, pinned: true },
+  ]).map((n) => `${n.id}:${n.pinned}`).join(','), 'sortNotes preserves pinned'],
 
   [5, nextLastSequence(null, 5), 'first sequence seen'],
   [9, nextLastSequence(9, 4), 'never goes backwards'],

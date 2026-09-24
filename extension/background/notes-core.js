@@ -43,6 +43,7 @@ export function stampNote(note, session) {
     t: at - (session?.startedAt ?? at),
     sequence: Number.isInteger(sequence) ? sequence : null,
     text,
+    pinned: note.pinned === true,
   };
 }
 
