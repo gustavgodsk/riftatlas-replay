@@ -1,20 +1,27 @@
 /**
  * In-game notes overlay (fork build).
  *
- * Alt+H, or the small pill bottom-left, opens a one-line note box. The note is
- * stamped with the game sequence at the moment the box opened and handed to
+ * Alt+H, or the small pill bottom-left, toggles a one-line note box. The note is
+ * stamped with the game sequence at the moment the note was started and handed to
  * the bridge (content/bridge.js, same isolated world), which queues it behind
  * the frames already on their way to the worker.
  *
  * Alt+P while the box is open (or the pin toggle in the box) marks the note as
- * pinned; it starts unpinned every time the box opens.
+ * pinned.
+ *
+ * Hiding the box (Alt+H or the pill again) keeps the draft: text, pin state and
+ * sequence stamp. Reopening a non-empty draft keeps its original sequence; an
+ * empty draft takes a fresh one. Only a successful save resets the draft (see
+ * content/notes-draft.js).
  *
  * Everything lives in a closed shadow root, and every key pressed inside it
- * stops there, so typing a note never reaches the game.
+ * stops there, so typing a note never reaches the game - except Escape, which
+ * the overlay ignores and leaves to the game (it exits fullscreen).
  */
 (() => {
   if (window !== window.top) return;
   const api = () => window.__riftatlasNotes;
+  const { openDraft, hideDraft, resetDraft } = globalThis.__riftatlasNoteDraft;
   const MAX = 1000;
 
   const CSS = `
@@ -43,7 +50,7 @@
       border-radius: 12px; background: rgba(20,60,30,.9); color: #dfd; font: 12px/1.4 system-ui, sans-serif; }
   `;
 
-  let host, pill, box, input, meta, pinEl, toast, seqAtOpen = null, pinned = false, saving = false, toastTimer = 0;
+  let host, pill, box, input, meta, pinEl, toast, draft = resetDraft(), pinned = false, saving = false, toastTimer = 0;
 
   const ready = () => {
     const s = api()?.getState();
@@ -56,7 +63,7 @@
     const root = host.attachShadow({ mode: 'closed' });
     root.innerHTML = `<style>${CSS}</style>
       <div class="pill off" title="no match yet">&#9998; note</div>
-      <div class="box" hidden><textarea rows="1" maxlength="${MAX}" placeholder="note (Enter saves, Esc cancels, Alt+P pins)"></textarea><div class="row"><div class="meta"></div><div class="pin" title="pin this note (Alt+P)">&#128204; pin</div></div></div>
+      <div class="box" hidden><textarea rows="1" maxlength="${MAX}" placeholder="note (Enter saves, Alt+H hides, Alt+P pins)"></textarea><div class="row"><div class="meta"></div><div class="pin" title="pin this note (Alt+P)">&#128204; pin</div></div></div>
       <div class="toast" hidden></div>`;
     pill = root.querySelector('.pill');
     box = root.querySelector('.box');
@@ -65,16 +72,15 @@
     pinEl = root.querySelector('.pin');
     toast = root.querySelector('.toast');
 
-    pill.addEventListener('click', (e) => { e.stopPropagation(); if (ready()) openBox(); });
+    pill.addEventListener('click', (e) => { e.stopPropagation(); if (box.hidden) { if (ready()) openBox(); } else hideBox(); });
     pinEl.addEventListener('mousedown', (e) => e.preventDefault()); // keep focus in the textarea
     pinEl.addEventListener('click', (e) => { e.stopPropagation(); setPinned(!pinned); input.focus(); });
-    // Nothing typed in the overlay may reach the game.
+    // Nothing typed in the overlay may reach the game, except Escape (fullscreen exit).
     for (const type of ['keydown', 'keyup', 'keypress']) {
-      host.addEventListener(type, (e) => e.stopPropagation());
+      host.addEventListener(type, (e) => { if (e.key !== 'Escape') e.stopPropagation(); });
     }
     input.addEventListener('keydown', (e) => {
       if (e.altKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyP') { e.preventDefault(); setPinned(!pinned); }
-      else if (e.key === 'Escape') { e.preventDefault(); closeBox(); }
       else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); save(); }
     });
     document.documentElement.appendChild(host);
@@ -96,18 +102,29 @@
 
   function openBox() {
     if (!host) mount();
-    seqAtOpen = api()?.getState().lastSequence ?? null;
+    draft = openDraft(draft, api()?.getState().lastSequence);
+    input.value = draft.text;
     meta.className = 'meta';
-    meta.textContent = Number.isInteger(seqAtOpen) ? `seq ${seqAtOpen}` : 'no sequence yet';
-    setPinned(false);
+    meta.textContent = Number.isInteger(draft.sequence) ? `seq ${draft.sequence}` : 'no sequence yet';
+    setPinned(draft.pinned);
     toast.hidden = true;
     box.hidden = false;
     input.focus();
   }
 
-  function closeBox() {
+  // Hide without losing anything: text, pin and sequence come back on reopen.
+  function hideBox() {
+    draft = hideDraft({ ...draft, pinned }, input.value);
     box.hidden = true;
+    input.blur();
+  }
+
+  // After a successful save only.
+  function clearBox() {
+    draft = resetDraft();
     input.value = '';
+    setPinned(false);
+    box.hidden = true;
     input.blur();
   }
 
@@ -123,9 +140,9 @@
     meta.textContent = 'saving...';
     try {
       const wasPinned = pinned;
-      const ack = await notes.enqueueNote(text, seqAtOpen, { pinned: wasPinned });
+      const ack = await notes.enqueueNote(text, draft.sequence, { pinned: wasPinned });
       if (ack?.ok) {
-        closeBox();
+        clearBox();
         showToast(`saved · seq ${ack.sequence ?? '?'}${wasPinned ? ' · pinned' : ''}`);
       } else {
         showError(ack?.error ?? 'not saved');
@@ -161,7 +178,7 @@
     e.preventDefault();
     e.stopPropagation();
     if (!host) mount();
-    if (box.hidden) openBox(); else input.focus();
+    if (box.hidden) openBox(); else hideBox();
   }, true);
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, { once: true });

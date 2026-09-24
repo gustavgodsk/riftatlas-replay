@@ -10,6 +10,8 @@
  *   node tests/notes.mjs
  */
 import { pickNoteTarget, stampNote, sortNotes, nextLastSequence } from '../extension/background/notes-core.js';
+await import('../extension/content/notes-draft.js');
+const { openDraft, hideDraft, resetDraft } = globalThis.__riftatlasNoteDraft;
 
 const MINUTE = 60 * 1000;
 const now = 1_700_000_000_000;
@@ -69,6 +71,19 @@ const cases = [
   [9, nextLastSequence(9, undefined), 'a frame without a sequence changes nothing'],
   [9, nextLastSequence(9, '12'), 'a non-integer sequence is ignored'],
   [null, nextLastSequence(undefined, undefined), 'nothing seen yet: null'],
+
+  [30, openDraft(resetDraft(), 30).sequence, 'empty draft on open: fresh sequence'],
+  [12, openDraft(hideDraft({ ...openDraft(resetDraft(), 12), pinned: true }, 'held gear'), 30).sequence,
+    'reopened non-empty draft keeps the sequence it was started at'],
+  ['held gear|true', (({ text, pinned }) => `${text}|${pinned}`)(
+    openDraft(hideDraft({ ...openDraft(resetDraft(), 12), pinned: true }, 'held gear'), 30)),
+    'hide then show keeps text and pin'],
+  [30, openDraft(hideDraft(openDraft(resetDraft(), 12), '   '), 30).sequence,
+    'a whitespace-only draft counts as empty: fresh sequence'],
+  [30, openDraft(hideDraft(openDraft(resetDraft(), null), 'x'), 30).sequence,
+    'a draft started with no sequence picks one up on reopen'],
+  ['|false|null', (({ text, pinned, sequence }) => `${text}|${pinned}|${sequence}`)(resetDraft()),
+    'reset clears text, pin and sequence'],
 ];
 
 let failed = 0;

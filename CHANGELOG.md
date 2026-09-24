@@ -4,6 +4,15 @@ What changed in each released version, in the words a player would use. The
 Chrome Web Store has no changelog field, so this is the record, and the source
 for the "What's new" block in the listing description.
 
+## 0.6.2.3 (fork build)
+
+- **Alt+H toggles the note box.** Press Alt+H (or click the pill) again to hide
+  it. Hiding keeps what you typed, the pin, and the game moment the note was
+  started; reopening shows them unchanged. The draft is cleared only when Enter
+  saves it.
+- **Escape belongs to the game again.** The note box no longer uses Esc, so Esc
+  exits fullscreen as usual even while the box is open.
+
 ## 0.6.2.2 (fork build)
 
 - **Pinned notes.** While the note box is open, press Alt+P (or click the
