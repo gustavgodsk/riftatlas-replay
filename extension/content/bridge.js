@@ -59,6 +59,12 @@ async function flush() {
       // A frame counts as delivered only when the worker says it stored it.
       // Anything else - no acknowledgement, or a failure - means try again.
       if (message.kind === 'frame' && !ack?.ok) throw new Error(ack?.error ?? 'no acknowledgement');
+      // A note needs an answer too, but a refusal (no recording yet, empty
+      // text) is final: hand it back to the note box instead of retrying.
+      if (message.kind === 'note') {
+        if (!ack) throw new Error('no acknowledgement');
+        settleNote(message.id, ack);
+      }
       queue.shift();
       stats.delivered++;
       stats.queued = queue.length;
@@ -74,6 +80,7 @@ async function flush() {
         // alternative is a match that silently stops recording halfway.
         stats.failures++;
         flushing = false;
+        failPendingNotes('extension reloaded, reload the page');
         console.warn('[riftatlas-replay] the extension was reloaded — recording has stopped. '
           + 'Reload this page to start recording again.');
         return;
@@ -90,6 +97,7 @@ window.addEventListener('message', (event) => {
   const msg = event.data;
   if (!msg || msg.source !== TAG) return;
 
+  trackMatch(msg);
   stats.seen++;
   if (queue.length >= MAX_QUEUE) { stats.failures++; return; }
   queue.push({
@@ -104,6 +112,72 @@ window.addEventListener('message', (event) => {
   if (queue.length > stats.maxQueue) stats.maxQueue = queue.length;
   flush();
 });
+
+// ── In-game notes ───────────────────────────────────────────────────────────
+//
+// The overlay (content/notes.js, same isolated world) asks for the match being
+// played and the last game sequence seen, and hands notes to the same ordered
+// queue the frames use, so a note never overtakes the frame before it.
+
+/** The match socket seen last: `{room, socketId}`. */
+let lastMatch = null;
+/** Highest `"sequence"` seen on that socket's frames. */
+let lastSequence = null;
+/** Notes awaiting the worker's answer, by note id. */
+const pendingNotes = new Map();
+
+function trackMatch(msg) {
+  try {
+    if (msg.kind === 'open' && msg.url) {
+      const m = new URL(msg.url, window.location.origin).pathname.match(/\/parties\/match\/([^/]+)/);
+      if (m) { lastMatch = { room: decodeURIComponent(m[1]), socketId: msg.socketId }; lastSequence = null; }
+    } else if (msg.kind === 'frame' && lastMatch && msg.socketId === lastMatch.socketId
+        && typeof msg.data === 'string') {
+      const m = msg.data.match(/"sequence":(\d+)/);
+      if (m) lastSequence = Math.max(lastSequence ?? 0, Number(m[1]));
+    }
+  } catch { /* a malformed url tells us nothing */ }
+}
+
+function settleNote(id, result) {
+  const pending = pendingNotes.get(id);
+  if (!pending) return;
+  pendingNotes.delete(id);
+  pending.resolve(result);
+}
+
+function failPendingNotes(error) {
+  for (const [id, pending] of pendingNotes) {
+    pendingNotes.delete(id);
+    pending.resolve({ ok: false, error });
+  }
+  // Drop the notes from the queue too; nothing will deliver them now.
+  for (let i = queue.length - 1; i >= 0; i--) if (queue[i].kind === 'note') queue.splice(i, 1);
+}
+
+function enqueueNote(text, seqAtOpen) {
+  if (!chrome.runtime?.id) return Promise.reject(new Error('extension reloaded, reload the page'));
+  if (!lastMatch) return Promise.resolve({ ok: false, error: 'no match yet' });
+  const note = {
+    type: 'observer',
+    kind: 'note',
+    roomCode: lastMatch.room,
+    text,
+    at: Date.now(),
+    sequence: Number.isInteger(seqAtOpen) ? seqAtOpen : null,
+    id: crypto.randomUUID(),
+  };
+  const answer = new Promise((resolve) => pendingNotes.set(note.id, { resolve }));
+  queue.push(note);
+  stats.queued = queue.length;
+  flush();
+  return answer;
+}
+
+window.__riftatlasNotes = {
+  enqueueNote,
+  getState: () => ({ hasMatch: !!lastMatch, lastSequence }),
+};
 
 // A closing page is the last chance to hand over anything still queued.
 window.addEventListener('pagehide', () => { flush(); });

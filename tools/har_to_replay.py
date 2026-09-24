@@ -205,6 +205,8 @@ def build(frames):
         "commits": commits,
         "gaps": gaps,
         "chat": sorted(chat.values(), key=lambda e: e.get("at", 0)),
+        # In-game notes are written in the extension; a HAR carries none.
+        "notes": [],
     }
 
 

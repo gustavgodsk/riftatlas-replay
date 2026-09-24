@@ -47,6 +47,10 @@ echo "== a closing socket ends one match, not all of them =="
 node "$ROOT/tests/socket-close.mjs"
 
 echo
+echo "== in-game notes =="
+node "$ROOT/tests/notes.mjs"
+
+echo
 echo "== the detector must not fire before the real ending =="
 node --input-type=module -e "
 import fs from 'node:fs';

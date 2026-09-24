@@ -32,6 +32,14 @@ check('no JWT-shaped strings', !/eyJ[A-Za-z0-9_-]{20,}/.test(raw));
 check('no authToken key', !raw.includes('"authToken"'));
 check('no party key', !raw.includes('"_pk"'));
 
+// In-game notes are optional; when present each is {sequence:int|null, text:string}.
+if (replay.notes !== undefined) {
+  check('notes is an array', Array.isArray(replay.notes));
+  check('notes are well formed', Array.isArray(replay.notes) && replay.notes.every((n) =>
+    (n.sequence === null || Number.isInteger(n.sequence)) && typeof n.text === 'string'),
+  `${replay.notes?.length} note(s)`);
+}
+
 const timeline = timelineFromReplay(replay);
 const index = buildIndex(timeline);
 check('sequences materialised', index.sequences.length > 0, String(index.sequences.length));

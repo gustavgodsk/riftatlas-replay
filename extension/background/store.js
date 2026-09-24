@@ -18,12 +18,14 @@
  * migration is needed and nothing already recorded is lost: existing rows keep
  * a bare room code as their id, which `roomOf` handles.
  */
+import { pickNoteTarget } from './notes-core.js';
+
 const DB = 'riftatlas-replay';
 const VERSION = 1;
 
 export const SESSIONS = 'sessions';   // id -> session metadata + origin snapshot
 export const COMMITS = 'commits';     // [id, sequence] -> commit
-export const EXTRAS = 'extras';       // [id, kind, key] -> chat / gap snapshot / error
+export const EXTRAS = 'extras';       // [id, kind, key] -> chat / gap snapshot / error / note
 export const REPLAYS = 'replays';     // id -> finished .ratlas.json
 
 /** A recording's identity: the room, plus when this recording began. */
@@ -115,6 +117,14 @@ export async function activeRecordingFor(roomCode, now = Date.now()) {
     .filter((s) => stillAccepting(s, now))
     .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
   return candidates[0] ?? null;
+}
+
+/**
+ * The recording a note for this room belongs to: the newest for the room, open
+ * or finished, ignoring the grace window. See notes-core.js.
+ */
+export async function noteTargetFor(roomCode) {
+  return pickNoteTarget(await all(SESSIONS), roomCode);
 }
 
 /**

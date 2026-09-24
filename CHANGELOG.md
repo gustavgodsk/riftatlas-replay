@@ -4,6 +4,13 @@ What changed in each released version, in the words a player would use. The
 Chrome Web Store has no changelog field, so this is the record, and the source
 for the "What's new" block in the listing description.
 
+## 0.6.2.1 (fork build)
+
+- **In-game notes.** Press Alt+H during a match (or click the small "note" pill
+  bottom-left), type a line, press Enter. The note is stamped with the game
+  moment the box opened, kept with the recording, and exported as `notes[]`
+  in the replay file. Esc cancels; Shift+Enter adds a line.
+
 ## 0.6.2
 
 - Removed the `tabs` permission. Nothing needed it, and it read as access to

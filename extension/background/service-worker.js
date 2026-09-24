@@ -5,7 +5,7 @@
  * match; everything it learns is already in IndexedDB by the time the message
  * handler returns, so a restart is invisible.
  */
-import { onFrame, looksFinished, everyoneLeft, endsWithSocket } from './recorder.js';
+import { onFrame, onNote, looksFinished, everyoneLeft, endsWithSocket } from './recorder.js';
 import { buildReplay } from './finalise.js';
 import { SESSIONS, COMMITS, EXTRAS, REPLAYS, all, get, put, dropRecording, commitsFor, roomOf, isEmptyRecording } from './store.js';
 
@@ -217,6 +217,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         if (reopened) await finalise(roomCode, { close: false });
       }).catch((error) => {
         // Nothing was stored. Say so, so the bridge sends it again.
+        sendResponse({ ok: false, error: String(error?.message ?? error) });
+      });
+      return true;
+    }
+
+    if (msg.kind === 'note') {
+      // An in-game note. Acknowledged only once stored, like a frame. A note on
+      // a finished recording rebuilds its replay in the background so the note
+      // is in it; the recording stays finished.
+      onNote(msg).then((result) => {
+        const { rebuild, ...response } = result;
+        sendResponse(response);
+        if (rebuild) finalise(rebuild, { close: false }).catch(() => {});
+      }).catch((error) => {
         sendResponse({ ok: false, error: String(error?.message ?? error) });
       });
       return true;

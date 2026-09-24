@@ -103,11 +103,23 @@ match lands at roughly 550 KiB uncompressed, well under 150 KiB gzipped.
 
   "chat": [
     { "at": 1789532387166, "authorPlayerId": "plr_135347f2", "text": "ggg" }
+  ],
+
+  "notes": [
+    { "id": "3f1c…", "at": 1789532101000, "t": 412000, "sequence": 187, "text": "should have held the gear" }
   ]
 }
 ```
 
 ## Field rules
+
+**`notes[]`** is additive and optional (fork build 0.6.2.1 and later). Each
+entry is a note the recording player typed during the match with Alt+H:
+`{id, at, t, sequence, text}`. `at` is wall clock, `t` is relative to the
+recording's first frame like `commits[].t`, and `sequence` is the game sequence
+when the note box was opened. `sequence` may be `null` when no sequence was
+known. Notes are ordered by sequence, then `at`, with `null` sequences last.
+Readers must treat a missing `notes` as `[]`.
 
 **`viewer.fogOfWar`** is the most important field in the document. It is `true`
 whenever any zone in the capture contained `__hidden_zone__` placeholders. A
