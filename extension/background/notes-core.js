@@ -63,3 +63,20 @@ export function nextLastSequence(prev, seq) {
   if (!Number.isInteger(prev)) return seq;
   return Math.max(prev, seq);
 }
+
+/**
+ * The note-history overlay (#50) shows local notes - this recording's own
+ * IndexedDB copy, always present and instant - plus anything the server
+ * already has for this room that local does not: a replay note from before
+ * this recording existed (a reused room code), or one typed elsewhere. A
+ * server note matching a local one on sequence + text is dropped rather than
+ * shown twice; local wins any tie, since it is what is actually being added to.
+ */
+export function mergeNoteHistory(local, remote) {
+  const key = (n) => `${Number.isInteger(n?.sequence) ? n.sequence : ''}\u0000${n?.text ?? ''}`;
+  const seen = new Set((local ?? []).map(key));
+  const extra = (remote ?? [])
+    .filter((n) => !seen.has(key(n)))
+    .map((n) => ({ ...n, synced: true }));
+  return sortNotes([...(local ?? []), ...extra]);
+}

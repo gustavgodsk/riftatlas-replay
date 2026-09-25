@@ -4,6 +4,15 @@ What changed in each released version, in the words a player would use. The
 Chrome Web Store has no changelog field, so this is the record, and the source
 for the "What's new" block in the listing description.
 
+## 0.6.4.0 (fork build)
+
+- **The note box shows this game's earlier notes.** Opening it (Alt+H or the
+  pill) now lists what has already been typed this match, oldest first,
+  scrollable if it runs long. A note you just saved shows up in the list
+  right away. If "send to site" is set up, notes already on the site for this
+  room are folded in too; if the site can't be reached the box still shows
+  your own notes and taking a new one still works exactly as before.
+
 ## 0.6.3.2 (fork build)
 
 - **Fixed: a finished match could be sent to the site twice.** Several

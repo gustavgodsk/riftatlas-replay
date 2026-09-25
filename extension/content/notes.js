@@ -17,6 +17,14 @@
  * Everything lives in a closed shadow root, and every key pressed inside it
  * stops there, so typing a note never reaches the game - except Escape, which
  * the overlay ignores and leaves to the game (it exits fullscreen).
+ *
+ * Opening the box also loads this game's note history (#50) - this
+ * recording's own notes, from the bridge's `getNotes()`, merged with anything
+ * already on the site for the same room. It is compact and scrollable, newest
+ * at the bottom (closest to what is being typed), and a note just saved is
+ * appended to it immediately rather than waiting on a re-fetch. A history
+ * fetch failing (offline, unauthed, extension reloaded) never blocks taking a
+ * note - it just leaves the box without history, or with a small message.
  */
 (() => {
   if (window !== window.top) return;
@@ -37,6 +45,15 @@
       background: rgba(20,20,24,.9); border: 1px solid rgba(255,255,255,.2);
       color: #eee; font: 13px/1.35 system-ui, sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
     .box[hidden], .toast[hidden] { display: none; }
+    .history { max-height: 96px; overflow-y: auto; margin-bottom: 6px; padding-bottom: 6px;
+      border-bottom: 1px solid rgba(255,255,255,.15); display: flex; flex-direction: column; gap: 3px; }
+    .history[hidden] { display: none; }
+    .h-row { display: flex; gap: 6px; font-size: 11px; line-height: 1.35; }
+    .h-tag { flex: 0 0 auto; color: #888; min-width: 1.5em; }
+    .h-text { color: #ddd; white-space: pre-wrap; word-break: break-word; }
+    .h-row.pinned .h-tag { color: #ffd54f; }
+    .h-row.synced .h-text { color: #bbb; }
+    .h-empty { font-size: 11px; color: #888; font-style: italic; }
     textarea { box-sizing: border-box; width: 100%; min-height: 28px; max-height: 120px; resize: vertical;
       background: rgba(0,0,0,.35); color: #fff; border: 1px solid rgba(255,255,255,.2);
       border-radius: 4px; padding: 4px 6px; font: inherit; outline: none; }
@@ -50,7 +67,9 @@
       border-radius: 12px; background: rgba(20,60,30,.9); color: #dfd; font: 12px/1.4 system-ui, sans-serif; }
   `;
 
-  let host, pill, box, input, meta, pinEl, toast, draft = resetDraft(), pinned = false, saving = false, toastTimer = 0;
+  let host, pill, box, input, meta, pinEl, toast, historyEl,
+    draft = resetDraft(), pinned = false, saving = false, toastTimer = 0,
+    historyNotes = [], historyLoad = 0;
 
   const ready = () => {
     const s = api()?.getState();
@@ -63,10 +82,11 @@
     const root = host.attachShadow({ mode: 'closed' });
     root.innerHTML = `<style>${CSS}</style>
       <div class="pill off" title="no match yet">&#9998; note</div>
-      <div class="box" hidden><textarea rows="1" maxlength="${MAX}" placeholder="note (Enter saves, Alt+H hides, Alt+P pins)"></textarea><div class="row"><div class="meta"></div><div class="pin" title="pin this note (Alt+P)">&#128204; pin</div></div></div>
+      <div class="box" hidden><div class="history" hidden></div><textarea rows="1" maxlength="${MAX}" placeholder="note (Enter saves, Alt+H hides, Alt+P pins)"></textarea><div class="row"><div class="meta"></div><div class="pin" title="pin this note (Alt+P)">&#128204; pin</div></div></div>
       <div class="toast" hidden></div>`;
     pill = root.querySelector('.pill');
     box = root.querySelector('.box');
+    historyEl = root.querySelector('.history');
     input = root.querySelector('textarea');
     meta = root.querySelector('.meta');
     pinEl = root.querySelector('.pin');
@@ -110,6 +130,67 @@
     toast.hidden = true;
     box.hidden = false;
     input.focus();
+    loadHistory();
+  }
+
+  /** Escapes nothing: every field is set via textContent, never innerHTML. */
+  function renderHistory() {
+    historyEl.textContent = '';
+    if (!historyNotes.length) { historyEl.hidden = true; return; }
+    historyEl.hidden = false;
+    for (const n of historyNotes) {
+      const row = document.createElement('div');
+      row.className = ['h-row', n.pinned && 'pinned', n.synced && 'synced'].filter(Boolean).join(' ');
+      const tag = document.createElement('span');
+      tag.className = 'h-tag';
+      tag.textContent = Number.isInteger(n.turn) ? `t${n.turn}`
+        : Number.isInteger(n.sequence) ? `#${n.sequence}` : '•';
+      const text = document.createElement('span');
+      text.className = 'h-text';
+      text.textContent = n.text;
+      row.append(tag, text);
+      historyEl.appendChild(row);
+    }
+    historyEl.scrollTop = historyEl.scrollHeight;
+  }
+
+  function showHistoryMessage(text) {
+    historyEl.textContent = '';
+    historyEl.hidden = false;
+    const div = document.createElement('div');
+    div.className = 'h-empty';
+    div.textContent = text;
+    historyEl.appendChild(div);
+  }
+
+  /**
+   * Fetches this game's note history and renders it. Renders whatever is
+   * already known first - the box opening is not held up on a round trip to
+   * the service worker - then replaces it once the fresh answer is in.
+   * Guarded by a request token so a slow answer from a box that has since
+   * been closed and reopened (a different game, possibly) never clobbers a
+   * newer render.
+   */
+  async function loadHistory() {
+    const token = ++historyLoad;
+    renderHistory();
+    const notes = api();
+    if (!notes?.getNotes) return;
+    let res;
+    try {
+      res = await notes.getNotes();
+    } catch (err) {
+      if (token !== historyLoad || box.hidden) return;
+      showHistoryMessage(String(err?.message ?? err));
+      return;
+    }
+    if (token !== historyLoad || box.hidden) return;
+    if (!res?.ok) {
+      if (res?.error && res.error !== 'no match yet') showHistoryMessage(res.error);
+      return;
+    }
+    historyNotes = res.notes ?? [];
+    renderHistory();
   }
 
   // Hide without losing anything: text, pin and sequence come back on reopen.
@@ -142,6 +223,10 @@
       const wasPinned = pinned;
       const ack = await notes.enqueueNote(text, draft.sequence, { pinned: wasPinned });
       if (ack?.ok) {
+        // Shown right away rather than waiting on a re-fetch: this recording's
+        // own note is exactly what was just handed to the bridge.
+        historyNotes = [...historyNotes, { text, sequence: ack.sequence ?? null, pinned: wasPinned }];
+        renderHistory();
         clearBox();
         showToast(`saved · seq ${ack.sequence ?? '?'}${wasPinned ? ' · pinned' : ''}`);
       } else {
