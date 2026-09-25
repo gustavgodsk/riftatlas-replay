@@ -81,7 +81,11 @@ document.getElementById('save-upload-settings').onclick = async () => {
 function uploadStatusEl(row) {
   const el = document.createElement('div');
   el.className = 'upload';
-  const upload = row.upload;
+  // A 'sending' the background never overwrote (MV3 killed the worker mid-fetch)
+  // would otherwise hide the button for good; after two minutes, offer a retry.
+  const upload = row.upload?.status === 'sending' && Date.now() - (row.upload.at ?? 0) > 120_000
+    ? { status: 'failed', error: 'Upload interrupted - click to retry' }
+    : row.upload;
 
   if (upload?.status === 'sent') {
     const badge = tag('sent', 'sent');
@@ -96,6 +100,14 @@ function uploadStatusEl(row) {
     } else {
       el.append(badge);
     }
+    return el;
+  }
+
+  if (upload?.status === 'sending') {
+    // Set synchronously by the background before its fetch goes out (see
+    // inFlight in service-worker.js) - shown as a plain badge, with no button
+    // underneath it, so a second click here can never race the same upload.
+    el.append(tag('sending…', 'sending'));
     return el;
   }
 

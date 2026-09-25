@@ -157,7 +157,7 @@ async function finalise(recordingId, { close = true } = {}) {
     pendingFinalise.delete(recordingId);
     // The recording just closed for good (not an in-progress rebuild): offer
     // it to auto-send, if it is set up and this is the first time (#29).
-    if (close) maybeAutoSend(recordingId, session).catch(() => {});
+    if (close) maybeAutoSend(recordingId).catch(() => {});
   } catch (err) {
     // Record why, and show it. A build can fail for a reason worth acting on -
     // a patch verb the reducer predates, say - and a console warning nobody
@@ -179,6 +179,23 @@ async function finalise(recordingId, { close = true } = {}) {
 const RETRY_ALARM_PREFIX = 'riftatlas-replay-upload-retry:';
 const retryAlarmName = (recordingId) => RETRY_ALARM_PREFIX + recordingId;
 
+/**
+ * Recording ids with an upload POST in flight right now.
+ *
+ * `session.upload` alone cannot dedupe: it is only written after the fetch
+ * resolves (`setUpload`, below the await), and several finalise(close:true)
+ * triggers can fire unserialised around game end - new room, everyone left,
+ * log looks finished, socket close. Each reads no `upload` on the session and
+ * starts its own POST, minted 0-1 ms apart. This Set is checked and updated
+ * synchronously, before the first `await` in `uploadSession`, so the second
+ * trigger to arrive - however soon - sees the first one already claimed it.
+ *
+ * finalise() itself does not need the same guard: rebuilding twice just
+ * overwrites REPLAYS with the same idempotent result. Only the upload has a
+ * side effect worth serialising - a POST that creates a row on the site.
+ */
+const inFlight = new Set();
+
 async function setUpload(recordingId, upload) {
   const session = await get(SESSIONS, recordingId);
   if (!session) return;
@@ -190,9 +207,16 @@ async function setUpload(recordingId, upload) {
  * Auto-send fires once, right after a recording closes for good - never for a
  * live match (`close: false` rebuilds do not reach here) and never twice for
  * the same recording (an `upload` already on the session means it has already
- * been sent, or is already mid-retry).
+ * been sent, is mid-retry, or is currently sending - see `inFlight`).
+ *
+ * The session is re-read here rather than trusting whatever the caller
+ * fetched: finalise() reads its copy before this runs, and with several
+ * finalise(close:true) triggers racing at game end, every one of those copies
+ * can show no `upload` yet. Reading fresh, right before the decision, is what
+ * lets the first trigger's `setUpload(..., 'sending')` be seen by the rest.
  */
-async function maybeAutoSend(recordingId, session) {
+async function maybeAutoSend(recordingId) {
+  const session = await get(SESSIONS, recordingId);
   if (!session?.finished || session.upload) return;
   const { siteUpload } = await chrome.storage.local.get('siteUpload');
   if (!siteUpload?.autoSend) return;
@@ -206,46 +230,64 @@ async function maybeAutoSend(recordingId, session) {
  * below; see `nextUploadState` for the state machine.
  */
 async function uploadSession(recordingId, attempt = 0) {
-  await chrome.alarms.clear(retryAlarmName(recordingId));
-
-  const { siteUpload } = await chrome.storage.local.get('siteUpload');
-  if (!siteUpload?.siteUrl || !siteUpload?.token) return { ok: false, error: 'not configured' };
-
-  // Rebuild first, always - the same rule the download path follows, so an
-  // upload is never a replay that fell behind the recording.
-  await finalise(recordingId, { close: false });
-  const [row, session] = await Promise.all([get(REPLAYS, recordingId), get(SESSIONS, recordingId)]);
-  if (!row) return { ok: false, error: 'nothing recorded for this room' };
-
-  const body = exportJson(row.replay);
-  const filename = uploadFilename(session, recordingId);
-
-  let ok = false;
-  let meta = {};
+  // Claimed synchronously, before any await: whichever caller gets here
+  // first - auto-send off a race of finalise triggers, or someone pressing
+  // "Send to site" twice - is the only one that proceeds.
+  if (inFlight.has(recordingId)) return { ok: false, error: 'upload already in progress' };
+  inFlight.add(recordingId);
   try {
-    const res = await fetch(`${siteUpload.siteUrl.replace(/\/+$/, '')}/api/replays`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${siteUpload.token}`,
-        'Content-Type': 'application/json',
-        'X-Replay-Filename': filename,
-      },
-      body,
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok) throw new Error(data?.outcome?.message || `HTTP ${res.status}`);
-    ok = true;
-    meta = { matchId: data?.outcome?.matchId ?? null, outcome: data?.outcome ?? null };
-  } catch (err) {
-    meta = { error: String(err?.message ?? err) };
-  }
+    await chrome.alarms.clear(retryAlarmName(recordingId));
 
-  const upload = { ...nextUploadState(attempt, ok, meta), at: Date.now() };
-  await setUpload(recordingId, upload);
-  if (!ok && upload.retryDelayMs != null) {
-    chrome.alarms.create(retryAlarmName(recordingId), { when: Date.now() + upload.retryDelayMs });
+    const { siteUpload } = await chrome.storage.local.get('siteUpload');
+    if (!siteUpload?.siteUrl || !siteUpload?.token) return { ok: false, error: 'not configured' };
+
+    // Rebuild first, always - the same rule the download path follows, so an
+    // upload is never a replay that fell behind the recording.
+    await finalise(recordingId, { close: false });
+    const [row, session] = await Promise.all([get(REPLAYS, recordingId), get(SESSIONS, recordingId)]);
+    if (!row) return { ok: false, error: 'nothing recorded for this room' };
+
+    const body = exportJson(row.replay);
+    const filename = uploadFilename(session, recordingId);
+
+    // Persisted before the fetch goes out, not after: `inFlight` only guards
+    // this worker instance, and MV3 is free to restart it. A session read
+    // anywhere in between - the popup, or a re-armed maybeAutoSend - now sees
+    // 'sending' rather than nothing.
+    await setUpload(recordingId, { status: 'sending', at: Date.now() });
+
+    let ok = false;
+    let meta = {};
+    try {
+      const res = await fetch(`${siteUpload.siteUrl.replace(/\/+$/, '')}/api/replays`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${siteUpload.token}`,
+          'Content-Type': 'application/json',
+          'X-Replay-Filename': filename,
+        },
+        body,
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.outcome?.message || `HTTP ${res.status}`);
+      ok = true;
+      meta = { matchId: data?.outcome?.matchId ?? null, outcome: data?.outcome ?? null };
+    } catch (err) {
+      meta = { error: String(err?.message ?? err) };
+    }
+
+    // Overwrites 'sending' either way, so a failure is left retryable (status
+    // 'failed', picked up by the alarm below or a person pressing Retry) and a
+    // success is left as the final 'sent' state.
+    const upload = { ...nextUploadState(attempt, ok, meta), at: Date.now() };
+    await setUpload(recordingId, upload);
+    if (!ok && upload.retryDelayMs != null) {
+      chrome.alarms.create(retryAlarmName(recordingId), { when: Date.now() + upload.retryDelayMs });
+    }
+    return ok ? { ok: true, upload } : { ok: false, error: upload.error, upload };
+  } finally {
+    inFlight.delete(recordingId);
   }
-  return ok ? { ok: true, upload } : { ok: false, error: upload.error, upload };
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
