@@ -81,7 +81,11 @@ document.getElementById('save-upload-settings').onclick = async () => {
 function uploadStatusEl(row) {
   const el = document.createElement('div');
   el.className = 'upload';
-  const upload = row.upload;
+  // A 'sending' the background never overwrote (MV3 killed the worker mid-fetch)
+  // would otherwise hide the button for good; after two minutes, offer a retry.
+  const upload = row.upload?.status === 'sending' && Date.now() - (row.upload.at ?? 0) > 120_000
+    ? { status: 'failed', error: 'Upload interrupted - click to retry' }
+    : row.upload;
 
   if (upload?.status === 'sent') {
     const badge = tag('sent', 'sent');

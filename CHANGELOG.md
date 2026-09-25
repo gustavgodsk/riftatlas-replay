@@ -11,7 +11,8 @@ for the "What's new" block in the listing description.
   one used to start its own send before the first had a chance to say it was
   already sending - so the site sometimes got two identical uploads a
   millisecond apart. Only the first now goes through; the popup shows
-  "sending…" while it is in flight.
+  "sending…" while it is in flight, and turns it back into a Retry button if
+  a send is still "sending" two minutes later (Chrome stopped it mid-way).
 
 ## 0.6.3.0 (fork build)
 
