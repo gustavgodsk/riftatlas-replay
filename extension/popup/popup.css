@@ -113,3 +113,4 @@ button.danger-solid:hover { background: #ff9d9d; border-color: #ff9d9d; }
 .tag.sent[href] { text-decoration: none; cursor: pointer; }
 .tag.sent[href]:hover { border-color: #7ed98a; }
 .tag.upload-failed { color: #ff9d6b; border-color: rgba(255,157,107,.4); cursor: help; }
+.tag.sending { color: #74efff; border-color: rgba(116,239,255,.4); }

@@ -4,6 +4,15 @@ What changed in each released version, in the words a player would use. The
 Chrome Web Store has no changelog field, so this is the record, and the source
 for the "What's new" block in the listing description.
 
+## 0.6.3.2 (fork build)
+
+- **Fixed: a finished match could be sent to the site twice.** Several
+  things can decide a match just ended at almost the same moment, and each
+  one used to start its own send before the first had a chance to say it was
+  already sending - so the site sometimes got two identical uploads a
+  millisecond apart. Only the first now goes through; the popup shows
+  "sending…" while it is in flight.
+
 ## 0.6.3.0 (fork build)
 
 - **Send finished matches straight to the site.** Opt-in: paste your site's

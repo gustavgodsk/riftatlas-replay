@@ -99,6 +99,14 @@ function uploadStatusEl(row) {
     return el;
   }
 
+  if (upload?.status === 'sending') {
+    // Set synchronously by the background before its fetch goes out (see
+    // inFlight in service-worker.js) - shown as a plain badge, with no button
+    // underneath it, so a second click here can never race the same upload.
+    el.append(tag('sending…', 'sending'));
+    return el;
+  }
+
   if (upload?.status === 'failed') {
     const badge = tag('failed', 'upload-failed');
     badge.title = upload.error ?? 'upload failed';
