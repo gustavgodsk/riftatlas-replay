@@ -175,8 +175,22 @@ function enqueueNote(text, seqAtOpen, { pinned = false } = {}) {
   return answer;
 }
 
+/**
+ * The note history for the match being played (#50): this recording's own
+ * notes, plus anything already on the site for the same room. A direct
+ * request-response, not routed through the frame/note queue above - reading
+ * history never has to wait behind, or hold up, whatever is being recorded.
+ */
+function getNotes() {
+  if (!chrome.runtime?.id) return Promise.resolve({ ok: false, error: 'extension reloaded, reload the page' });
+  if (!lastMatch) return Promise.resolve({ ok: false, error: 'no match yet', notes: [] });
+  return chrome.runtime.sendMessage({ type: 'get_game_notes', room: lastMatch.room })
+    .catch((err) => ({ ok: false, error: String(err?.message ?? err), notes: [] }));
+}
+
 window.__riftatlasNotes = {
   enqueueNote,
+  getNotes,
   getState: () => ({ hasMatch: !!lastMatch, lastSequence }),
 };
 

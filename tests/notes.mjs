@@ -9,7 +9,7 @@
  *
  *   node tests/notes.mjs
  */
-import { pickNoteTarget, stampNote, sortNotes, nextLastSequence } from '../extension/background/notes-core.js';
+import { pickNoteTarget, stampNote, sortNotes, nextLastSequence, mergeNoteHistory } from '../extension/background/notes-core.js';
 await import('../extension/content/notes-draft.js');
 const { openDraft, hideDraft, resetDraft } = globalThis.__riftatlasNoteDraft;
 
@@ -64,6 +64,26 @@ const cases = [
     { id: 'a', sequence: 5, at: 1, pinned: false },
     { id: 'b', sequence: 2, at: 2, pinned: true },
   ]).map((n) => `${n.id}:${n.pinned}`).join(','), 'sortNotes preserves pinned'],
+
+  // #50: the overlay's note history - local notes merged with anything the
+  // site already has for this room that local does not.
+  ['a,b', mergeNoteHistory(
+    [{ text: 'a', sequence: 1 }, { text: 'b', sequence: 2 }], [],
+  ).map((n) => n.text).join(','), 'no remote notes: just local, in order'],
+  ['a,b', mergeNoteHistory(
+    [], [{ text: 'a', sequence: 1 }, { text: 'b', sequence: 2 }],
+  ).map((n) => n.text).join(','), 'no local notes yet: shows the remote history'],
+  [true, mergeNoteHistory([], [{ text: 'a', sequence: 1 }]).every((n) => n.synced),
+    'remote-only notes are marked synced'],
+  [false, mergeNoteHistory([{ text: 'a', sequence: 1 }], []).some((n) => n.synced),
+    'local notes are never marked synced'],
+  [1, mergeNoteHistory(
+    [{ text: 'a', sequence: 1 }], [{ text: 'a', sequence: 1 }],
+  ).length, 'a remote note matching a local one on sequence+text is dropped, not duplicated'],
+  ['a,b', mergeNoteHistory(
+    [{ text: 'a', sequence: 1 }], [{ text: 'a', sequence: 1 }, { text: 'b', sequence: 2 }],
+  ).map((n) => n.text).join(','), 'only the genuinely new remote note is added'],
+  [0, mergeNoteHistory(null, null).length, 'no history at all: empty, not a crash'],
 
   [5, nextLastSequence(null, 5), 'first sequence seen'],
   [9, nextLastSequence(9, 4), 'never goes backwards'],

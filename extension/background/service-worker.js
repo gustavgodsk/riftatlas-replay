@@ -7,8 +7,9 @@
  */
 import { onFrame, onNote, looksFinished, everyoneLeft, endsWithSocket } from './recorder.js';
 import { buildReplay } from './finalise.js';
-import { SESSIONS, COMMITS, EXTRAS, REPLAYS, all, get, put, dropRecording, commitsFor, roomOf, isEmptyRecording } from './store.js';
+import { SESSIONS, COMMITS, EXTRAS, REPLAYS, all, get, put, dropRecording, commitsFor, roomOf, isEmptyRecording, notesForRoom } from './store.js';
 import { exportJson, uploadFilename, nextUploadState } from './upload-core.js';
+import { mergeNoteHistory } from './notes-core.js';
 
 /**
  * Build a data: URL for a download from raw JSON text. Chunked, because
@@ -510,6 +511,39 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg?.type === 'set_upload_settings') {
     chrome.storage.local.set({ siteUpload: msg.siteUpload }).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (msg?.type === 'get_game_notes') {
+    // The note overlay's history (#50): this recording's own notes, always
+    // available and instant, plus whatever the site already has for this room
+    // that local does not - only reachable when "send to site" is configured,
+    // and never something the overlay has to wait on or fail without.
+    (async () => {
+      const local = await notesForRoom(msg.room);
+      let remote = [];
+      let remoteError = null;
+      try {
+        const { siteUpload } = await chrome.storage.local.get('siteUpload');
+        if (siteUpload?.siteUrl && siteUpload?.token && msg.room) {
+          const res = await fetch(
+            `${siteUpload.siteUrl.replace(/\/+$/, '')}/api/notes?room=${encodeURIComponent(msg.room)}`,
+            { headers: { Authorization: `Bearer ${siteUpload.token}` } },
+          );
+          if (res.ok) {
+            const data = await res.json().catch(() => null);
+            remote = Array.isArray(data?.notes) ? data.notes : [];
+          } else {
+            remoteError = `server said ${res.status}`;
+          }
+        } else {
+          remoteError = 'not configured';
+        }
+      } catch (err) {
+        remoteError = String(err?.message ?? err);
+      }
+      sendResponse({ ok: true, notes: mergeNoteHistory(local, remote), remoteError });
+    })();
     return true;
   }
 

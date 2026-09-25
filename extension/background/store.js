@@ -18,7 +18,7 @@
  * migration is needed and nothing already recorded is lost: existing rows keep
  * a bare room code as their id, which `roomOf` handles.
  */
-import { pickNoteTarget } from './notes-core.js';
+import { pickNoteTarget, sortNotes } from './notes-core.js';
 
 const DB = 'riftatlas-replay';
 const VERSION = 1;
@@ -125,6 +125,19 @@ export async function activeRecordingFor(roomCode, now = Date.now()) {
  */
 export async function noteTargetFor(roomCode) {
   return pickNoteTarget(await all(SESSIONS), roomCode);
+}
+
+/**
+ * Notes typed so far for one room, in game order (#50) - what the note
+ * overlay shows as this game's history. Same recording `noteTargetFor` would
+ * write a new note to, so a note already on screen is exactly where the next
+ * one will land.
+ */
+export async function notesForRoom(roomCode) {
+  const session = await noteTargetFor(roomCode);
+  if (!session) return [];
+  const extras = await extrasFor(session.roomCode, 'note');
+  return sortNotes(extras.map((r) => ({ ...r.note, pinned: r.note?.pinned === true })));
 }
 
 /**
