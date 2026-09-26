@@ -8,7 +8,9 @@
  * in service-worker.js - is not covered here; it cannot run outside Chrome.
  * See upload-core.js for what is pure and why.
  */
-import { exportJson, uploadFilename, nextUploadState, RETRY_DELAYS_MS, shouldAutoSend } from '../extension/background/upload-core.js';
+import {
+  exportJson, uploadFilename, nextUploadState, RETRY_DELAYS_MS, shouldAutoSend, AUTO_SEND_COUNTDOWN_MS,
+} from '../extension/background/upload-core.js';
 
 const cases = [
   // exportJson: the same string both the download and the upload send.
@@ -65,6 +67,13 @@ const cases = [
     'never auto-sends when send-to-site is not configured at all'],
   [true, shouldAutoSend({ finished: true, origin: {} }, 5, { autoSend: true }),
     'auto-sends a finished, non-empty, unsent recording when configured'],
+
+  // Auto-send countdown toast: armed once (this still gates the arming, not
+  // an instant send - see service-worker.js armCountdown/resolveCountdown),
+  // and never re-armed while one is already counting down.
+  [10_000, AUTO_SEND_COUNTDOWN_MS, 'the auto-send countdown is ten seconds'],
+  [false, shouldAutoSend({ finished: true, upload: { status: 'countdown', sendAt: Date.now() + 5000 } }, 5, { autoSend: true }),
+    'never re-arms a recording already counting down'],
 ];
 
 let failed = 0;

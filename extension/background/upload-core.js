@@ -24,6 +24,15 @@ export function uploadFilename(session, recordingId) {
 export const RETRY_DELAYS_MS = [5_000, 30_000, 120_000];
 
 /**
+ * How long the auto-send countdown toast waits before sending by default.
+ * Ten seconds is enough to notice the toast and hit Discard for a game that
+ * should not be kept - an opponent who left before it really started, say -
+ * without turning "send automatically" into something that has to be
+ * babysat every game.
+ */
+export const AUTO_SEND_COUNTDOWN_MS = 10_000;
+
+/**
  * What a session's `upload` field should hold after one attempt, and how long
  * to wait before the next one - or `retryDelayMs: null` once the automatic
  * retries are exhausted, left as `status: 'failed'` for a person to retry by
@@ -43,10 +52,17 @@ export function nextUploadState(attempt, ok, meta = {}) {
 }
 
 /**
- * Should this just-finished recording be offered to auto-send (#54)?
+ * Should this just-finished recording be armed for auto-send (#54)?
  *
- * Never for a recording still in progress, or one already sent/sending/retried
- * (`session.upload` set) - the guards `maybeAutoSend` always had. New here:
+ * "Armed" rather than sent outright: a positive answer starts the countdown
+ * toast (service-worker.js `armCountdown`), not the upload itself - see
+ * AUTO_SEND_COUNTDOWN_MS. The countdown sets `session.upload.status` to
+ * `'countdown'` as soon as it starts, so this still only ever answers yes
+ * once per recording.
+ *
+ * Never for a recording still in progress, or one already
+ * sent/sending/counting-down/retried (`session.upload` set) - the guards
+ * `maybeAutoSend` always had. New here:
  * never for an *empty* recording either - `commitCount` 0, the same signal
  * `isEmptyRecording` uses to hide these from the popup. A room can be opened
  * (a `room_shell_sync`, or a stray reconnect) without a single move ever being
