@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "RiftAtlas Replay",
-  "version": "0.6.4.0",
+  "version": "0.6.4.1",
   "description": "Records your RiftAtlas matches and replays them offline. Observes only - never sends, modifies, or delays a game action.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtweHZL0F9C/XJsM0Z26X/8qeqoNIevMHjDzUlYCJRT/cHvj9g/oAyaN6o141yZFnEzJlCC/lmWumDNMqspTcPbLNlgxvNzyOrO/LX3gN7MGjoBSFp06bvf2ymk5LUgjX05OOwJbjuDDTWSdqY1H/FYsnQdZqvhF8oXxFl8M26T8iJ/CdkSBmtiEQo8L2P8bQCFovINRv3cvYDTlAn8sZdjEkEftlRgzfG3rpsH7Q9J2obl7gBeQJi5j2TJStmhahnjtgTqWQiWNvgcZUZGUmkJRCfNXficD4VMj3793+m06Y6zEBI6b98SGq5djYNPJGiWBbX8nDQ2j1mXFwZxDhAwIDAQAB",
   "icons": {

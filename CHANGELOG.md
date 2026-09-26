@@ -4,6 +4,18 @@ What changed in each released version, in the words a player would use. The
 Chrome Web Store has no changelog field, so this is the record, and the source
 for the "What's new" block in the listing description.
 
+## 0.6.4.1 (fork build)
+
+- **Fixed: a room nobody actually played could still get sent to the site.**
+  Opening a room - most often the "next game" lobby a best-of-three opens the
+  instant one game ends - starts a recording before a single move is made, and
+  if it was then abandoned (the opponent didn't want to play it out, or the
+  lobby was just looked at), "send automatically" used to send it anyway: a
+  0-0 game with nothing behind it, landing on the site and confusing that
+  match's Bo3 record. Recordings with no moves in them are never auto-sent now.
+  A real game that ends 0-0 because someone left before either side scored is
+  unaffected - that's still a real, recorded loss for the leaver.
+
 ## 0.6.4.0 (fork build)
 
 - **The note box shows this game's earlier notes.** Opening it (Alt+H or the

@@ -8,7 +8,7 @@
  * in service-worker.js - is not covered here; it cannot run outside Chrome.
  * See upload-core.js for what is pure and why.
  */
-import { exportJson, uploadFilename, nextUploadState, RETRY_DELAYS_MS } from '../extension/background/upload-core.js';
+import { exportJson, uploadFilename, nextUploadState, RETRY_DELAYS_MS, shouldAutoSend } from '../extension/background/upload-core.js';
 
 const cases = [
   // exportJson: the same string both the download and the upload send.
@@ -49,6 +49,22 @@ const cases = [
   // A manual retry always passes attempt 0, so it gets the full sequence back.
   [RETRY_DELAYS_MS[0], nextUploadState(0, false).retryDelayMs,
     'a manual retry (attempt 0) gets the first delay again, not wherever it left off'],
+
+  // shouldAutoSend (#54): a ghost, no-play recording must never reach the site.
+  [false, shouldAutoSend({ finished: false }, 5, { autoSend: true }),
+    'never auto-sends a recording still in progress'],
+  [false, shouldAutoSend({ finished: true, upload: { status: 'sent' } }, 5, { autoSend: true }),
+    'never auto-sends a recording already sent (or sending, or mid-retry)'],
+  [false, shouldAutoSend({ finished: true, origin: {} }, 0, { autoSend: true }),
+    'never auto-sends an empty recording - zero commits, nothing was played'],
+  [true, shouldAutoSend({ finished: true, origin: {} }, 1, { autoSend: true }),
+    'auto-sends a recording with even a single real commit'],
+  [false, shouldAutoSend({ finished: true, origin: {} }, 5, { autoSend: false }),
+    'never auto-sends when "send automatically" is off'],
+  [false, shouldAutoSend({ finished: true, origin: {} }, 5, null),
+    'never auto-sends when send-to-site is not configured at all'],
+  [true, shouldAutoSend({ finished: true, origin: {} }, 5, { autoSend: true }),
+    'auto-sends a finished, non-empty, unsent recording when configured'],
 ];
 
 let failed = 0;

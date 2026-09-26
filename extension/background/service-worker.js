@@ -8,7 +8,7 @@
 import { onFrame, onNote, looksFinished, everyoneLeft, endsWithSocket } from './recorder.js';
 import { buildReplay } from './finalise.js';
 import { SESSIONS, COMMITS, EXTRAS, REPLAYS, all, get, put, dropRecording, commitsFor, roomOf, isEmptyRecording, notesForRoom } from './store.js';
-import { exportJson, uploadFilename, nextUploadState } from './upload-core.js';
+import { exportJson, uploadFilename, nextUploadState, shouldAutoSend } from './upload-core.js';
 import { mergeNoteHistory } from './notes-core.js';
 
 /**
@@ -215,12 +215,18 @@ async function setUpload(recordingId, upload) {
  * finalise(close:true) triggers racing at game end, every one of those copies
  * can show no `upload` yet. Reading fresh, right before the decision, is what
  * lets the first trigger's `setUpload(..., 'sending')` be seen by the rest.
+ *
+ * Also never for an *empty* recording (#54): see `shouldAutoSend` in
+ * upload-core.js for why a room that never caught a single commit must not
+ * reach the site as a 0-0 "game".
  */
 async function maybeAutoSend(recordingId) {
-  const session = await get(SESSIONS, recordingId);
-  if (!session?.finished || session.upload) return;
-  const { siteUpload } = await chrome.storage.local.get('siteUpload');
-  if (!siteUpload?.autoSend) return;
+  const [session, commits, { siteUpload }] = await Promise.all([
+    get(SESSIONS, recordingId),
+    commitsFor(recordingId),
+    chrome.storage.local.get('siteUpload'),
+  ]);
+  if (!shouldAutoSend(session, commits.length, siteUpload)) return;
   uploadSession(recordingId).catch(() => {});
 }
 
