@@ -111,6 +111,17 @@ function uploadStatusEl(row) {
     return el;
   }
 
+  if (upload?.status === 'countdown') {
+    // The auto-send countdown toast on the RiftAtlas page is where "Send
+    // now" and "Discard" live - no button here, so a plain "Send to site"
+    // click in the popup can never race the countdown into sending twice.
+    const remaining = Math.max(0, Math.ceil(((upload.sendAt ?? 0) - Date.now()) / 1000));
+    const badge = tag(`sending in ${remaining}s…`, 'sending');
+    badge.title = 'Auto-send is counting down on the RiftAtlas page - use its toast to send now or discard.';
+    el.append(badge);
+    return el;
+  }
+
   if (upload?.status === 'failed') {
     const badge = tag('failed', 'upload-failed');
     badge.title = upload.error ?? 'upload failed';

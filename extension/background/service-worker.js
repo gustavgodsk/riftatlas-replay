@@ -8,7 +8,7 @@
 import { onFrame, onNote, looksFinished, everyoneLeft, endsWithSocket } from './recorder.js';
 import { buildReplay } from './finalise.js';
 import { SESSIONS, COMMITS, EXTRAS, REPLAYS, all, get, put, dropRecording, commitsFor, roomOf, isEmptyRecording, notesForRoom } from './store.js';
-import { exportJson, uploadFilename, nextUploadState, shouldAutoSend } from './upload-core.js';
+import { exportJson, uploadFilename, nextUploadState, shouldAutoSend, AUTO_SEND_COUNTDOWN_MS } from './upload-core.js';
 import { mergeNoteHistory } from './notes-core.js';
 
 /**
@@ -180,6 +180,90 @@ async function finalise(recordingId, { close = true } = {}) {
 const RETRY_ALARM_PREFIX = 'riftatlas-replay-upload-retry:';
 const retryAlarmName = (recordingId) => RETRY_ALARM_PREFIX + recordingId;
 
+// ---- Auto-send countdown --------------------------------------------------
+//
+// "Send automatically" no longer sends the instant a match finishes: it arms
+// a ten-second countdown instead, shown as a toast on the RiftAtlas page
+// (content/autosend.js), with "Send now" and "Discard". The deadline itself
+// lives here, against chrome.alarms rather than a timer in this worker or in
+// the page - both can disappear mid-countdown (MV3 kills an idle worker, a
+// person can close or navigate the tab) and the default of "send anyway" has
+// to survive either one. The toast is only ever a view onto `sendAt`.
+
+const COUNTDOWN_ALARM_PREFIX = 'riftatlas-replay-autosend-countdown:';
+const countdownAlarmName = (recordingId) => COUNTDOWN_ALARM_PREFIX + recordingId;
+
+/**
+ * Recording ids currently armed (or being armed), from `maybeAutoSend` right
+ * through to `resolveCountdown`. Guards the same race `inFlight` guards for
+ * uploadSession: several finalise(close:true) triggers can fire unserialised
+ * around game end, and every one of them can read no `session.upload` yet -
+ * this is checked and claimed synchronously, before the first `await`, so
+ * only the first one arms the countdown.
+ */
+const armingCountdown = new Set();
+
+/** Every tab open on RiftAtlas - there is normally at most one. */
+async function notifyTabs(message) {
+  const tabs = await chrome.tabs.query({ url: 'https://play.riftatlas.com/*' });
+  for (const tab of tabs) chrome.tabs.sendMessage(tab.id, message).catch(() => {});
+}
+
+async function armCountdown(recordingId) {
+  const session = await get(SESSIONS, recordingId);
+  const sendAt = Date.now() + AUTO_SEND_COUNTDOWN_MS;
+  await setUpload(recordingId, { status: 'countdown', sendAt });
+  chrome.alarms.create(countdownAlarmName(recordingId), { when: sendAt });
+  await notifyTabs({
+    type: 'autosend_countdown', recordingId,
+    room: session?.room ?? roomOf(recordingId), sendAt,
+  });
+}
+
+/**
+ * Recording ids with a countdown resolution (send or discard) in progress
+ * right now - the same shape of guard as `inFlight`, so the alarm firing at
+ * the same instant as a "Send now"/"Discard" click can never run twice.
+ */
+const resolvingCountdown = new Set();
+
+/**
+ * Ends an armed countdown one of three ways: `'send_now'` or `'timeout'` both
+ * send (attempt 0, same as any fresh send), `'discard'` deletes the recording
+ * outright instead - the same thing pressing Delete in the popup does, so a
+ * discarded game leaves no local copy behind either, consistent with how
+ * every other "forget this recording" action in this extension works.
+ */
+async function resolveCountdown(recordingId, action) {
+  if (resolvingCountdown.has(recordingId)) return { ok: false, error: 'already resolving' };
+  resolvingCountdown.add(recordingId);
+  try {
+    await chrome.alarms.clear(countdownAlarmName(recordingId));
+    const session = await get(SESSIONS, recordingId);
+    if (session?.upload?.status !== 'countdown') {
+      // Already resolved - the alarm and a button press landed at the same
+      // moment, or a stale message arrived for a countdown that is over.
+      return { ok: true, alreadyResolved: true };
+    }
+
+    if (action === 'discard') {
+      await dropRecording(recordingId);
+      await notifyTabs({ type: 'autosend_resolved', recordingId, outcome: 'discarded' });
+      return { ok: true, outcome: 'discarded' };
+    }
+
+    const result = await uploadSession(recordingId);
+    await notifyTabs({
+      type: 'autosend_resolved', recordingId,
+      outcome: result.ok ? 'sent' : 'failed', error: result.error ?? null,
+    });
+    return result;
+  } finally {
+    resolvingCountdown.delete(recordingId);
+    armingCountdown.delete(recordingId);
+  }
+}
+
 /**
  * Recording ids with an upload POST in flight right now.
  *
@@ -205,16 +289,17 @@ async function setUpload(recordingId, upload) {
 }
 
 /**
- * Auto-send fires once, right after a recording closes for good - never for a
+ * Auto-send arms once, right after a recording closes for good - never for a
  * live match (`close: false` rebuilds do not reach here) and never twice for
- * the same recording (an `upload` already on the session means it has already
- * been sent, is mid-retry, or is currently sending - see `inFlight`).
+ * the same recording (an `upload` already on the session means it has
+ * already been sent, is mid-retry, is currently sending, or is already
+ * counting down - see `armingCountdown`).
  *
  * The session is re-read here rather than trusting whatever the caller
  * fetched: finalise() reads its copy before this runs, and with several
  * finalise(close:true) triggers racing at game end, every one of those copies
  * can show no `upload` yet. Reading fresh, right before the decision, is what
- * lets the first trigger's `setUpload(..., 'sending')` be seen by the rest.
+ * lets the first trigger's arm be seen by the rest.
  *
  * Also never for an *empty* recording (#54): see `shouldAutoSend` in
  * upload-core.js for why a room that never caught a single commit must not
@@ -227,7 +312,16 @@ async function maybeAutoSend(recordingId) {
     chrome.storage.local.get('siteUpload'),
   ]);
   if (!shouldAutoSend(session, commits.length, siteUpload)) return;
-  uploadSession(recordingId).catch(() => {});
+  // Claimed synchronously, before any await inside armCountdown - the same
+  // race `inFlight` guards for uploadSession, one step earlier.
+  if (armingCountdown.has(recordingId)) return;
+  armingCountdown.add(recordingId);
+  try {
+    await armCountdown(recordingId);
+  } catch (err) {
+    armingCountdown.delete(recordingId);
+    throw err;
+  }
 }
 
 /**
@@ -244,6 +338,11 @@ async function uploadSession(recordingId, attempt = 0) {
   inFlight.add(recordingId);
   try {
     await chrome.alarms.clear(retryAlarmName(recordingId));
+    // Belt and suspenders: whatever route got here - the countdown resolving
+    // itself, a retry alarm, or a person clicking "Send to site" in the
+    // popup while a countdown happened to be running - a send in flight must
+    // never leave a countdown alarm behind to fire a second one later.
+    await chrome.alarms.clear(countdownAlarmName(recordingId));
 
     const { siteUpload } = await chrome.storage.local.get('siteUpload');
     if (!siteUpload?.siteUrl || !siteUpload?.token) return { ok: false, error: 'not configured' };
@@ -298,11 +397,19 @@ async function uploadSession(recordingId, attempt = 0) {
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (!alarm.name.startsWith(RETRY_ALARM_PREFIX)) return;
-  const recordingId = alarm.name.slice(RETRY_ALARM_PREFIX.length);
-  get(SESSIONS, recordingId).then((session) => {
-    uploadSession(recordingId, session?.upload?.attempts ?? 0).catch(() => {});
-  });
+  if (alarm.name.startsWith(RETRY_ALARM_PREFIX)) {
+    const recordingId = alarm.name.slice(RETRY_ALARM_PREFIX.length);
+    get(SESSIONS, recordingId).then((session) => {
+      uploadSession(recordingId, session?.upload?.attempts ?? 0).catch(() => {});
+    });
+    return;
+  }
+  if (alarm.name.startsWith(COUNTDOWN_ALARM_PREFIX)) {
+    // The countdown ran out with nobody pressing a button: send, exactly as
+    // auto-send always has.
+    const recordingId = alarm.name.slice(COUNTDOWN_ALARM_PREFIX.length);
+    resolveCountdown(recordingId, 'timeout').catch(() => {});
+  }
 });
 
 /**
@@ -507,6 +614,31 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     // A person pressing "Send to site" or "Retry" - always attempt 0, so a
     // manual retry gets the full backoff sequence again (#29).
     uploadSession(msg.roomCode).then((result) => sendResponse(result));
+    return true;
+  }
+
+  if (msg?.type === 'autosend_send_now') {
+    // "Send now" on the countdown toast - skip the rest of the wait.
+    resolveCountdown(msg.recordingId, 'send_now').then((result) => sendResponse(result));
+    return true;
+  }
+
+  if (msg?.type === 'autosend_discard') {
+    // "Discard" on the countdown toast - the game is not sent, and nothing
+    // of it is kept locally either (the same as pressing Delete in the popup).
+    resolveCountdown(msg.recordingId, 'discard').then((result) => sendResponse(result));
+    return true;
+  }
+
+  if (msg?.type === 'get_active_countdowns') {
+    // Recovers the toast after the page loaded (or reloaded) partway through
+    // a countdown - no `autosend_countdown` message ever reaches a page that
+    // was not there to receive it.
+    all(SESSIONS).then((sessions) => {
+      sendResponse(sessions
+        .filter((s) => s.upload?.status === 'countdown')
+        .map((s) => ({ recordingId: s.roomCode, room: s.room ?? roomOf(s.roomCode), sendAt: s.upload.sendAt })));
+    });
     return true;
   }
 

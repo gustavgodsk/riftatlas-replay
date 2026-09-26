@@ -4,6 +4,18 @@ What changed in each released version, in the words a player would use. The
 Chrome Web Store has no changelog field, so this is the record, and the source
 for the "What's new" block in the listing description.
 
+## 0.6.5.0 (fork build)
+
+- **"Send automatically" now gives you ten seconds to change your mind.** A
+  finished match no longer goes straight to the site: a small toast appears
+  bottom-right on the RiftAtlas page counting down from 10, with **Send
+  now** and **Discard**. Do nothing and it sends at zero, exactly as before.
+  Discard drops the recording entirely - nothing is uploaded, and nothing of
+  it is kept locally either - for the games you'd rather throw away, like one
+  where the opponent left before it really started. The countdown survives a
+  closed or reloaded tab: it is tracked in the background, not the page, so
+  it still sends on schedule either way.
+
 ## 0.6.4.1 (fork build)
 
 - **Fixed: a room nobody actually played could still get sent to the site.**
