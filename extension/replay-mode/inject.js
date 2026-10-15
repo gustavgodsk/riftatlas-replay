@@ -86,6 +86,11 @@ function begin(replay, ARM) {
         case 'unset_room_fields': for (const f of op.fields) delete state[f]; break;
         case 'set_player_fields': Object.assign(P(op.playerId), op.fields); break;
         case 'set_board_fields': Object.assign(P(op.playerId).board, op.fields); break;
+        case 'unset_board_fields': {
+          if (!Array.isArray(op.fields)) throw new Error('unset_board_fields without a list of fields');
+          for (const f of op.fields) delete P(op.playerId).board[f];
+          break;
+        }
         case 'zone_insert': Z(op.playerId, op.zone).splice(op.index, 0, ...clone(op.cards)); break;
         case 'zone_remove': {
           const b = P(op.playerId).board, drop = new Set(op.cardIds);

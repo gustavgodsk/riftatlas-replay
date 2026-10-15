@@ -16,7 +16,7 @@ import { Timeline, SNAPSHOT_ONLY_PLAYER_FIELDS, OPS } from '../extension/shared/
  * Rebuild button that did nothing. `zone_replace` was the verb.
  */
 const SEEN_IN_THE_WILD = [
-  'set_room_fields', 'unset_room_fields', 'set_player_fields', 'set_board_fields',
+  'set_room_fields', 'unset_room_fields', 'set_player_fields', 'set_board_fields', 'unset_board_fields',
   'zone_insert', 'zone_remove', 'zone_reorder', 'zone_move', 'zone_replace',
   'patch_card_fields', 'unset_card_fields', 'log_insert', 'log_remove',
   'chain_insert', 'chain_remove', 'chain_replace',

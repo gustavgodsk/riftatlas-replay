@@ -60,6 +60,7 @@ Normative semantics: `tools/reducer.py`.
 | `unset_room_fields` | `fields` (list of names) | Delete root keys. |
 | `set_player_fields` | `playerId`, `fields` | Merge into the player object. |
 | `set_board_fields` | `playerId`, `fields` | Merge into `player.board` (non-zone scalars). |
+| `unset_board_fields` | `playerId`, `fields` (list of names, assumed) | Delete `player.board` keys. Seen first on 2026-10-15. |
 | `zone_insert` | `playerId`, `zone`, `index`, `cards` | Splice cards in at `index`. |
 | `zone_remove` | `playerId`, `zone`, `cardIds` | Remove by id. |
 | `zone_reorder` | `playerId`, `zone`, `cardIds` | Reorder to the given id sequence. |
