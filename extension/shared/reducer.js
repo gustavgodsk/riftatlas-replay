@@ -10,7 +10,7 @@
 /** Every patch operation verb observed in the protocol. */
 export const OPS = [
   'set_room_fields', 'unset_room_fields',
-  'set_player_fields', 'set_board_fields',
+  'set_player_fields', 'set_board_fields', 'unset_board_fields',
   'zone_insert', 'zone_remove', 'zone_reorder', 'zone_move', 'zone_replace',
   'patch_card_fields', 'unset_card_fields',
   'log_insert', 'log_remove',
@@ -62,6 +62,14 @@ export function applyOperation(state, log, op) {
     case 'set_board_fields':
       Object.assign(player(state, op.playerId).board, op.fields);
       break;
+    case 'unset_board_fields': {
+      // Seen first on 2026-10-15. Assumed to carry a list of names like the
+      // other unset verbs; anything else must fail loudly, not delete nothing.
+      if (!Array.isArray(op.fields)) throw new Error(`unset_board_fields without a list of fields`);
+      const board = player(state, op.playerId).board;
+      for (const field of op.fields) delete board[field];
+      break;
+    }
 
     case 'zone_insert':
       zone(state, op.playerId, op.zone).splice(op.index, 0, ...clone(op.cards));
