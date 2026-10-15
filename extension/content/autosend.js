@@ -57,6 +57,8 @@
   const resolvedWhileQueued = new Map();
   let tickTimer = 0;
   let settleTimer = 0;
+  let pollTimer = 0;
+  const POLL_MS = 2000;
 
   function mount() {
     if (host) return;
@@ -102,10 +104,30 @@
     msg.textContent = text;
     sendBtn.disabled = true;
     discardBtn.disabled = true;
+    pollUntilResolved();
+  }
+
+  /**
+   * Ask the background how it ended, rather than only waiting to be told. The
+   * 'autosend_resolved' message can miss this page - sent while it navigated,
+   * or never sent by a worker stopped mid-send - and a toast waiting on it sat
+   * at "Sending…" forever.
+   */
+  function pollUntilResolved() {
+    clearInterval(pollTimer);
+    const { recordingId } = current;
+    pollTimer = setInterval(async () => {
+      if (current?.recordingId !== recordingId) { clearInterval(pollTimer); return; }
+      try {
+        const result = await chrome.runtime.sendMessage({ type: 'get_upload_status', recordingId });
+        if (result && current?.recordingId === recordingId) showResult(result.outcome, result.error);
+      } catch { /* extension reloaded; ask again next time round */ }
+    }, POLL_MS);
   }
 
   function showResult(outcome, error) {
     clearInterval(tickTimer);
+    clearInterval(pollTimer);
     const text = outcome === 'discarded' ? 'Discarded'
       : outcome === 'sent' ? 'Sent'
       : `Not sent — ${error ?? 'failed'}`;
@@ -123,6 +145,7 @@
   function showCurrent() {
     mount();
     clearInterval(tickTimer);
+    clearInterval(pollTimer);
     clearTimeout(settleTimer);
     sendBtn.disabled = false;
     discardBtn.disabled = false;

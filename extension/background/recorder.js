@@ -5,7 +5,7 @@
  * accumulates in worker memory, so an MV3 worker termination mid-match costs
  * nothing.
  */
-import { SESSIONS, COMMITS, EXTRAS, put, get, recordingId, activeRecordingFor, noteTargetFor } from './store.js';
+import { SESSIONS, COMMITS, EXTRAS, put, update, recordingId, activeRecordingFor, noteTargetFor } from './store.js';
 import { stampNote, nextLastSequence } from './notes-core.js';
 
 /** Frame types that carry authoritative state or match context. */
@@ -84,12 +84,16 @@ async function handleFrame({ data, at, socketId }) {
   // a finished recording - that would merge two unrelated matches, the new
   // one's early sequences overwriting the old one's.
   let session = await activeRecordingFor(room, at);
-  // A frame landing on a recording that has just closed reopens it, and the
-  // caller rebuilds so the late arrival is not stranded in a replay built
-  // without it.
-  const wasClosed = session?.finished === true;
-  if (wasClosed) session.finished = false;
-  if (!session) {
+  // A frame landing on a recording that has just closed is still stored there.
+  // Only game state reopens it - a move or a snapshot means the close came too
+  // early - and the caller rebuilds so the late arrival is not stranded in a
+  // replay built without it. The shell syncs and chat that follow leaving a
+  // match do not: they used to reopen it in the moment between closing and
+  // arming auto-send, so the match was never sent and sat as "recording".
+  const late = session?.finished === true;
+  const reopened = late && carriesGameState(msg);
+  const isNew = !session;
+  if (isNew) {
     // Only a frame that carries game state may start a recording. Looking at a
     // room sends a shell sync and nothing else, and a finished room can be
     // looked at long after the match - which used to create an empty recording
@@ -176,8 +180,32 @@ async function handleFrame({ data, at, socketId }) {
       break;
   }
 
-  await put(SESSIONS, session);
-  return { id: roomCode, reopened: wasClosed };
+  const changes = { ...getRecordedFields(session), ...(reopened ? { finished: false } : {}) };
+  // A recording deleted while this frame was handled - discarded from the
+  // auto-send toast, say - stays deleted.
+  await update(SESSIONS, roomCode, (stored) => (stored ? { ...stored, ...changes } : isNew && session));
+  return { id: roomCode, late, reopened };
+}
+
+function carriesGameState(msg) {
+  return msg.type === 'authoritative_snapshot' || msg.type === 'authoritative_patch_commit';
+}
+
+/** The session fields a frame can change. The rest belong to finalise and the upload. */
+const RECORDER_FIELDS = [
+  'lastAt', 'lastSequence', 'socketId', 'origin', 'partial', 'shell', 'viewer', 'seatCount', 'everyoneLeft',
+];
+
+/**
+ * What this frame found, and nothing else.
+ *
+ * Only these are written back, laid over the stored record. finalise and the
+ * upload write the same record while a frame is being handled, and writing
+ * back the whole copy read at the start of the frame undid them.
+ */
+export function getRecordedFields(session) {
+  return Object.fromEntries(RECORDER_FIELDS.filter((field) => field in session)
+    .map((field) => [field, session[field]]));
 }
 
 /**

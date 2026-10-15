@@ -11,6 +11,8 @@
 <div id="tools">
   <button id="dump" title="Everything the recorder holds, for a bug report">Debug dump</button>
   <button id="unstick" title="Forget the room RiftAtlas thinks you are in, and return to the lobby. Use this if it says it cannot reconnect to your game.">Back to lobby</button>
+  <button id="backfill" hidden title="Send every finished match the site does not have yet, oldest first. Keeps going if you close this popup; the site skips any it already has.">Send unsent</button>
+  <span id="backfill-status"></span>
 </div>
 <details id="upload-settings">
   <summary>Send to site</summary>

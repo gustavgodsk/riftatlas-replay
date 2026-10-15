@@ -77,10 +77,50 @@ export const get = (store, key) => run(store, 'readonly', (s) => s.get(key));
 export const all = (store, range) => run(store, 'readonly', (s) => s.getAll(range));
 export const del = (store, key) => run(store, 'readwrite', (s) => s.delete(key));
 
+/**
+ * Read one record, change it and write it back in a single transaction, so no
+ * other write can land in between.
+ *
+ * A `get` then a `put` is two transactions, and the session record has several
+ * writers - the recorder, finalise, the upload - that run unserialised. Each
+ * one wrote back the whole copy it had read, undoing whatever the others wrote
+ * meanwhile: a 'sent' upload went back to 'sending', an armed countdown
+ * vanished, a closed recording quietly reopened.
+ *
+ * `change` gets the stored record (undefined if absent) and returns the record
+ * to store, or null to leave it alone. It must be synchronous: a transaction
+ * closes as soon as it has nothing left to do.
+ */
+export function update(store, key, change) {
+  return open().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(store, 'readwrite');
+    const objects = tx.objectStore(store);
+    const read = objects.get(key);
+    let failure = null;
+    read.onsuccess = () => {
+      try {
+        const changed = change(read.result);
+        if (changed) objects.put(changed);
+      } catch (err) {
+        failure = err;
+        tx.abort();
+      }
+    };
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(failure ?? tx.error ?? new Error(`update of ${key} aborted`));
+  }));
+}
+
 /** Every commit for one recording, in sequence order. */
 export function commitsFor(id) {
   return all(COMMITS, IDBKeyRange.bound([id, -Infinity], [id, Infinity]))
     .then((rows) => rows.sort((a, b) => a.sequence - b.sequence));
+}
+
+/** How many commits one recording holds, without reading them. */
+export function countCommits(id) {
+  return run(COMMITS, 'readonly', (s) => s.count(IDBKeyRange.bound([id, -Infinity], [id, Infinity])));
 }
 
 /** Extras of one kind for one recording. */

@@ -82,3 +82,68 @@ export function shouldAutoSend(session, commitCount, siteUpload) {
   if (isEmptyRecording(session, commitCount)) return false;
   return siteUpload?.autoSend === true;
 }
+
+/**
+ * How long a 'sending' or an overdue countdown may stand before it counts as
+ * stuck. Either one hides the Send button, and the worker that would have
+ * finished it can be gone - MV3 stops it freely, mid-fetch included.
+ */
+export const STUCK_AFTER_MS = 120_000;
+
+/** An open recording this long without a frame is a match that ended unnoticed. */
+export const ABANDONED_AFTER_MS = 30 * 60 * 1000;
+
+/**
+ * The upload state as the popup, the toast and backfill should treat it: a
+ * 'sending' or 'countdown' nothing is coming back to finish reads as 'failed',
+ * so it can be sent again.
+ */
+export function getShownUpload(upload, now) {
+  if (upload?.status === 'sending' && now - (upload.at ?? 0) > STUCK_AFTER_MS) {
+    return { status: 'failed', error: 'Upload interrupted - click to retry' };
+  }
+  if (upload?.status === 'countdown' && now - (upload.sendAt ?? 0) > STUCK_AFTER_MS) {
+    return { status: 'failed', error: 'Auto-send never finished - click to retry' };
+  }
+  return upload ?? null;
+}
+
+/**
+ * How an auto-send countdown ended, for the toast: `{outcome, error?}`, or null
+ * while it is still counting down or sending. A recording that is gone was
+ * discarded.
+ */
+export function getCountdownResult(session, now) {
+  if (!session) return { outcome: 'discarded' };
+  const upload = getShownUpload(session.upload, now);
+  if (upload?.status === 'sent') return { outcome: 'sent' };
+  if (upload?.status === 'failed') return { outcome: 'failed', error: upload.error ?? null };
+  if (!upload) return { outcome: 'failed', error: 'not sent - use Send to site in the popup' };
+  return null;
+}
+
+/**
+ * Should "Send unsent" send this recording?
+ *
+ * Every recording that holds a game and has not reached the site: closed, or
+ * open but silent long enough to be a match that ended without the extension
+ * noticing. Never one being sent or counted down right now, and never one
+ * that cannot build - no anchoring snapshot, or a build that failed - since
+ * there is nothing to send until it does. The site dedupes
+ * on room and capture time, so a recording that did arrive but lost its 'sent'
+ * mark only comes back as a duplicate.
+ */
+export function isUnsent(session, commitCount, now) {
+  if (!commitCount || !session.origin || session.buildError) return false;
+  if (!isClosed(session, now)) return false;
+  const status = getShownUpload(session.upload, now)?.status;
+  return status !== 'sent' && status !== 'sending' && status !== 'countdown';
+}
+
+/** Has this recording ended, whether or not anything closed it? */
+function isClosed(session, now) {
+  return session.finished === true || now - (session.lastAt ?? 0) > ABANDONED_AFTER_MS;
+}
+
+/** Stop "Send unsent" after this many failures in a row: the site or the token is down, not one game. */
+export const BACKFILL_MAX_FAILURES_IN_A_ROW = 3;

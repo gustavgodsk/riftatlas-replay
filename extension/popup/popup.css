@@ -18,6 +18,10 @@ button:hover { border-color: #74efff; }
 #note { flex: none; color: #8698ab; font-size: 11.5px; margin: 6px 0 8px; }
 #tools { flex: none; display: flex; gap: 6px; margin: 0 0 10px; }
 #tools button { font-size: 11.5px; }
+#tools { align-items: center; flex-wrap: wrap; }
+#backfill { color: #74efff; border-color: rgba(116,239,255,.4); }
+#backfill:disabled { opacity: .7; cursor: default; }
+#backfill-status { color: #8698ab; font-size: 11px; }
 
 #search { flex: none; width: 100%; box-sizing: border-box; margin: 0 0 8px; padding: 5px 8px;
   font: inherit; color: #dbe7f3; background: #0d141c; border: 1px solid #24313f;
