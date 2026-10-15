@@ -4,6 +4,26 @@ What changed in each released version, in the words a player would use. The
 Chrome Web Store has no changelog field, so this is the record, and the source
 for the "What's new" block in the listing description.
 
+## 0.6.6.0 (fork build)
+
+- **Fixed: a finished match could get stuck at "Sending…" and never reach the
+  site**, most often right after leaving a game. The frames that arrive as
+  you leave were overwriting the send in progress: the countdown vanished, the
+  toast waited forever, and the match went back to "recording" so it was never
+  sent at all. A send that was already done could also flip back to
+  "sending…". Each part of the extension now only writes what it owns.
+- **Fixed: the toast no longer hangs on "Sending…".** It asks how the send
+  ended instead of waiting to be told, and a send that gives up for any
+  reason now says so - with Retry back in the popup - rather than sitting
+  there.
+- **The ten-second countdown now really is ten seconds.** It used to wait at
+  least thirty on an installed (packed) build.
+- **New: "Send unsent".** A button in the popup sends every finished match the
+  site does not have yet, oldest first. It keeps going if you close the popup,
+  and the site skips any it already has, so pressing it twice is harmless.
+- Leaving a match no longer rebuilds every recording in your history at once,
+  which made the send of the game you had just finished wait behind them.
+
 ## 0.6.5.0 (fork build)
 
 - **"Send automatically" now gives you ten seconds to change your mind.** A

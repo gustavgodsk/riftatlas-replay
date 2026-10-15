@@ -7,8 +7,14 @@
  */
 import { onFrame, onNote, looksFinished, everyoneLeft, endsWithSocket } from './recorder.js';
 import { buildReplay } from './finalise.js';
-import { SESSIONS, COMMITS, EXTRAS, REPLAYS, all, get, put, dropRecording, commitsFor, roomOf, isEmptyRecording, notesForRoom } from './store.js';
-import { exportJson, uploadFilename, nextUploadState, shouldAutoSend, AUTO_SEND_COUNTDOWN_MS } from './upload-core.js';
+import {
+  SESSIONS, COMMITS, EXTRAS, REPLAYS, all, get, put, update, dropRecording, commitsFor, countCommits, roomOf,
+  isEmptyRecording, notesForRoom, stillAccepting,
+} from './store.js';
+import {
+  exportJson, uploadFilename, nextUploadState, shouldAutoSend, AUTO_SEND_COUNTDOWN_MS,
+  getShownUpload, getCountdownResult, isUnsent, BACKFILL_MAX_FAILURES_IN_A_ROW,
+} from './upload-core.js';
 import { mergeNoteHistory } from './notes-core.js';
 
 /**
@@ -132,11 +138,7 @@ chrome.runtime.onStartup.addListener(() => { rebuildFailed('browser start').catc
 async function finalise(recordingId, { close = true } = {}) {
   if (close) {
     try {
-      const session = await get(SESSIONS, recordingId);
-      if (session && !session.finished) {
-        session.finished = true;
-        await put(SESSIONS, session);
-      }
+      await closeRecording(recordingId);
     } catch (err) {
       console.warn('[riftatlas-replay] could not close', recordingId, err.message);
     }
@@ -144,17 +146,8 @@ async function finalise(recordingId, { close = true } = {}) {
   try {
     const replay = await buildReplay(recordingId);
     await put(REPLAYS, { roomCode: recordingId, builtAt: Date.now(), replay });
-    const session = await get(SESSIONS, recordingId);
-    if (session) {
-      const stopped = replay.coverage?.stoppedAt ?? null;
-      const had = session.buildError || session.coverageStoppedEarly;
-      delete session.buildError;
-      // A replay that stopped early is still worth retrying later, for the same
-      // reason a failed one is: the missing piece arrives with a new version.
-      if (stopped) session.coverageStoppedEarly = stopped.reason;
-      else delete session.coverageStoppedEarly;
-      if (had || stopped) await put(SESSIONS, session);
-    }
+    const stopped = replay.coverage?.stoppedAt ?? null;
+    await update(SESSIONS, recordingId, (session) => getWithBuildResult(session, stopped));
     pendingFinalise.delete(recordingId);
     // The recording just closed for good (not an in-progress rebuild): offer
     // it to auto-send, if it is set up and this is the first time (#29).
@@ -164,11 +157,28 @@ async function finalise(recordingId, { close = true } = {}) {
     // a patch verb the reducer predates, say - and a console warning nobody
     // reads made that look like a button that simply does nothing.
     console.warn('[riftatlas-replay] could not build', recordingId, err.message);
-    try {
-      const session = await get(SESSIONS, recordingId);
-      if (session) { session.buildError = String(err?.message ?? err); await put(SESSIONS, session); }
-    } catch { /* the session is gone */ }
+    const buildError = String(err?.message ?? err);
+    await update(SESSIONS, recordingId, (session) => session && { ...session, buildError })
+      .catch(() => {});
   }
+}
+
+function closeRecording(recordingId) {
+  return update(SESSIONS, recordingId,
+    (session) => (session && !session.finished ? { ...session, finished: true } : null));
+}
+
+/**
+ * The session with this build's verdict on it, or null when there is nothing
+ * to change. A replay that stopped early is still worth retrying later, for
+ * the same reason a failed one is: the missing piece arrives with a new
+ * version.
+ */
+function getWithBuildResult(session, stopped) {
+  if (!session) return null;
+  const { buildError, coverageStoppedEarly, ...rest } = session;
+  if (!buildError && !coverageStoppedEarly && !stopped) return null;
+  return stopped ? { ...rest, coverageStoppedEarly: stopped.reason } : rest;
 }
 
 // ---- Send to site (#29) --------------------------------------------------
@@ -213,6 +223,10 @@ async function armCountdown(recordingId) {
   const session = await get(SESSIONS, recordingId);
   const sendAt = Date.now() + AUTO_SEND_COUNTDOWN_MS;
   await setUpload(recordingId, { status: 'countdown', sendAt });
+  // A packed extension's alarm never fires sooner than 30 seconds out, so the
+  // ten-second countdown sat at "Sending…" for twenty more. The timer sends on
+  // time; the alarm is there for a worker stopped before it fires.
+  setTimeout(() => { resolveCountdown(recordingId, 'timeout').catch(() => {}); }, AUTO_SEND_COUNTDOWN_MS);
   chrome.alarms.create(countdownAlarmName(recordingId), { when: sendAt });
   await notifyTabs({
     type: 'autosend_countdown', recordingId,
@@ -241,8 +255,12 @@ async function resolveCountdown(recordingId, action) {
     await chrome.alarms.clear(countdownAlarmName(recordingId));
     const session = await get(SESSIONS, recordingId);
     if (session?.upload?.status !== 'countdown') {
-      // Already resolved - the alarm and a button press landed at the same
-      // moment, or a stale message arrived for a countdown that is over.
+      // Already resolved - the timer, the alarm and a button press can all
+      // land, or a stale message arrived for a countdown that is over. Still
+      // tell the page how it ended: a toast waiting on this was stuck at
+      // "Sending…" for good when the answer was never sent.
+      const result = getCountdownResult(session, Date.now());
+      if (result) await notifyTabs({ type: 'autosend_resolved', recordingId, ...result });
       return { ok: true, alreadyResolved: true };
     }
 
@@ -281,11 +299,10 @@ async function resolveCountdown(recordingId, action) {
  */
 const inFlight = new Set();
 
-async function setUpload(recordingId, upload) {
-  const session = await get(SESSIONS, recordingId);
-  if (!session) return;
-  session.upload = upload;
-  await put(SESSIONS, session);
+const UPLOAD_TIMEOUT_MS = 60_000;
+
+function setUpload(recordingId, upload) {
+  return update(SESSIONS, recordingId, (session) => session && { ...session, upload });
 }
 
 /**
@@ -343,57 +360,77 @@ async function uploadSession(recordingId, attempt = 0) {
     // popup while a countdown happened to be running - a send in flight must
     // never leave a countdown alarm behind to fire a second one later.
     await chrome.alarms.clear(countdownAlarmName(recordingId));
-
-    const { siteUpload } = await chrome.storage.local.get('siteUpload');
-    if (!siteUpload?.siteUrl || !siteUpload?.token) return { ok: false, error: 'not configured' };
-
-    // Rebuild first, always - the same rule the download path follows, so an
-    // upload is never a replay that fell behind the recording.
-    await finalise(recordingId, { close: false });
-    const [row, session] = await Promise.all([get(REPLAYS, recordingId), get(SESSIONS, recordingId)]);
-    if (!row) return { ok: false, error: 'nothing recorded for this room' };
-
-    const body = exportJson(row.replay);
-    const filename = uploadFilename(session, recordingId);
-
-    // Persisted before the fetch goes out, not after: `inFlight` only guards
-    // this worker instance, and MV3 is free to restart it. A session read
-    // anywhere in between - the popup, or a re-armed maybeAutoSend - now sees
-    // 'sending' rather than nothing.
-    await setUpload(recordingId, { status: 'sending', at: Date.now() });
-
-    let ok = false;
-    let meta = {};
-    try {
-      const res = await fetch(`${siteUpload.siteUrl.replace(/\/+$/, '')}/api/replays`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${siteUpload.token}`,
-          'Content-Type': 'application/json',
-          'X-Replay-Filename': filename,
-        },
-        body,
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.outcome?.message || `HTTP ${res.status}`);
-      ok = true;
-      meta = { matchId: data?.outcome?.matchId ?? null, outcome: data?.outcome ?? null };
-    } catch (err) {
-      meta = { error: String(err?.message ?? err) };
-    }
-
-    // Overwrites 'sending' either way, so a failure is left retryable (status
-    // 'failed', picked up by the alarm below or a person pressing Retry) and a
-    // success is left as the final 'sent' state.
-    const upload = { ...nextUploadState(attempt, ok, meta), at: Date.now() };
-    await setUpload(recordingId, upload);
-    if (!ok && upload.retryDelayMs != null) {
-      chrome.alarms.create(retryAlarmName(recordingId), { when: Date.now() + upload.retryDelayMs });
-    }
-    return ok ? { ok: true, upload } : { ok: false, error: upload.error, upload };
+    return await sendToSite(recordingId, attempt);
+  } catch (err) {
+    return await recordFailure(recordingId, attempt, String(err?.message ?? err));
   } finally {
     inFlight.delete(recordingId);
   }
+}
+
+/**
+ * Every way a send ends writes its own outcome. A send that gave up early used
+ * to return without one, leaving 'countdown' on the session for good: no
+ * button in the popup, and a toast at "Sending…" on every page load after.
+ * Not retried automatically - none of these is fixed by waiting.
+ */
+async function recordFailure(recordingId, attempt, error) {
+  const upload = { ...nextUploadState(attempt, false, { error }), retryDelayMs: null, at: Date.now() };
+  await setUpload(recordingId, upload);
+  return { ok: false, error, upload };
+}
+
+async function sendToSite(recordingId, attempt) {
+  const { siteUpload } = await chrome.storage.local.get('siteUpload');
+  if (!siteUpload?.siteUrl || !siteUpload?.token) return recordFailure(recordingId, attempt, 'not configured');
+
+  // Rebuild first, always - the same rule the download path follows, so an
+  // upload is never a replay that fell behind the recording.
+  await finalise(recordingId, { close: false });
+  const [row, session] = await Promise.all([get(REPLAYS, recordingId), get(SESSIONS, recordingId)]);
+  if (!row) return recordFailure(recordingId, attempt, session?.buildError ?? 'nothing recorded for this room');
+
+  const body = exportJson(row.replay);
+  const filename = uploadFilename(session, recordingId);
+
+  // Persisted before the fetch goes out, not after: `inFlight` only guards
+  // this worker instance, and MV3 is free to restart it. A session read
+  // anywhere in between - the popup, or a re-armed maybeAutoSend - now sees
+  // 'sending' rather than nothing.
+  await setUpload(recordingId, { status: 'sending', at: Date.now() });
+
+  let ok = false;
+  let meta = {};
+  try {
+    const res = await fetch(`${siteUpload.siteUrl.replace(/\/+$/, '')}/api/replays`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${siteUpload.token}`,
+        'Content-Type': 'application/json',
+        'X-Replay-Filename': filename,
+      },
+      body,
+      // Without one, a stalled connection held 'sending' for as long as the
+      // worker lived. The site answers well inside this, cold start included.
+      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.outcome?.message || `HTTP ${res.status}`);
+    ok = true;
+    meta = { matchId: data?.outcome?.matchId ?? null, outcome: data?.outcome ?? null };
+  } catch (err) {
+    meta = { error: String(err?.message ?? err) };
+  }
+
+  // Overwrites 'sending' either way, so a failure is left retryable (status
+  // 'failed', picked up by the alarm below or a person pressing Retry) and a
+  // success is left as the final 'sent' state.
+  const upload = { ...nextUploadState(attempt, ok, meta), at: Date.now() };
+  await setUpload(recordingId, upload);
+  if (!ok && upload.retryDelayMs != null) {
+    chrome.alarms.create(retryAlarmName(recordingId), { when: Date.now() + upload.retryDelayMs });
+  }
+  return ok ? { ok: true, upload } : { ok: false, error: upload.error, upload };
 }
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -411,6 +448,61 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     resolveCountdown(recordingId, 'timeout').catch(() => {});
   }
 });
+
+// ---- Send unsent (backfill) -----------------------------------------------
+//
+// Every recording that holds a game and never reached the site, oldest first:
+// the site links a best-of-three as its games arrive, so they arrive in the
+// order they were played. One at a time - the site serialises one person's
+// uploads anyway. Sent ones are skipped, so pressing it again after a stop
+// carries on where it left off.
+
+let backfilling = false;
+
+async function backfill() {
+  if (backfilling) return { ok: false, error: 'already running' };
+  backfilling = true;
+  try {
+    return await sendAll(await getUnsentRecordings());
+  } finally {
+    backfilling = false;
+  }
+}
+
+async function getUnsentRecordings() {
+  const now = Date.now();
+  const sessions = await all(SESSIONS);
+  const counts = await Promise.all(sessions.map((s) => countCommits(s.roomCode)));
+  return sessions
+    .filter((s, i) => isUnsent(s, counts[i], now))
+    .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))
+    .map((s) => s.roomCode);
+}
+
+async function sendAll(recordingIds) {
+  const total = recordingIds.length;
+  let sent = 0;
+  let failed = 0;
+  let failuresInARow = 0;
+  let error = null;
+  const report = (running) => chrome.storage.session.set({
+    backfill: { running, total, sent, failed, error, at: Date.now() },
+  });
+
+  await report(true);
+  for (const recordingId of recordingIds) {
+    // An open recording long silent is a match that ended unnoticed: close
+    // it, so it stops showing as "recording". A no-op for a closed one.
+    await closeRecording(recordingId);
+    const result = await uploadSession(recordingId);
+    if (result.ok) { sent += 1; failuresInARow = 0; }
+    else { failed += 1; failuresInARow += 1; error = result.error; }
+    if (failuresInARow >= BACKFILL_MAX_FAILURES_IN_A_ROW) break;
+    await report(true);
+  }
+  await report(false);
+  return { ok: failed === 0, total, sent, failed, error };
+}
 
 /**
  * The room whose frames we saw last. A different one means the previous match
@@ -434,14 +526,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       onFrame(msg).then(async (result) => {
         sendResponse({ ok: true });
         if (!result) return;
-        const { id: roomCode, reopened } = result;
+        const { id: roomCode, late, reopened } = result;
 
-        // A frame arriving on a closed recording reopens it, and the room it
-        // belongs to is not the room being played now - so leave `currentRoom`
-        // alone. Whether it is over is decided below, on the evidence, rather
-        // than assumed from the fact that it was closed once already: the
-        // close may have been the mistake.
-        if (!reopened) {
+        // A frame arriving on a closed recording belongs to a room that is not
+        // the one being played now - so leave `currentRoom` alone. Whether it
+        // is over is decided below, on the evidence, rather than assumed from
+        // the fact that it was closed once already: the close may have been
+        // the mistake.
+        if (!late) {
           // A new room started: whatever came before it is finished.
           if (currentRoom && currentRoom !== roomCode) {
             const previous = currentRoom;
@@ -502,8 +594,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       // or the replay stays frozen wherever the detector misfired. An unknown
       // socket closes nothing: the other end triggers will finish the match,
       // and leaving a recording open costs far less than ending a live one.
+      //
+      // Only recordings that can still take a frame, though. One that cannot
+      // has nothing new to build from, and rebuilding the whole history at
+      // once on every close - leaving a match closes one - buried the upload
+      // of the game just finished behind dozens of builds.
       all(SESSIONS).then((sessions) => {
-        for (const s of sessions) {
+        const now = Date.now();
+        for (const s of sessions.filter((session) => stillAccepting(session, now))) {
           finalise(s.roomCode, { close: endsWithSocket(s, msg.socketId) });
         }
       });
@@ -573,7 +671,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             buildError: s.buildError ?? null,
             stoppedEarly: replay?.coverage?.stoppedAt ?? null,
             needsNewVersion: needsNewVersion(s.buildError || s.coverageStoppedEarly || ''),
-            upload: s.upload ?? null,
+            upload: getShownUpload(s.upload, now),
+            unsent: isUnsent(s, recorded, now),
           };
         }));
       sendResponse(rows);
@@ -627,6 +726,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     // "Discard" on the countdown toast - the game is not sent, and nothing
     // of it is kept locally either (the same as pressing Delete in the popup).
     resolveCountdown(msg.recordingId, 'discard').then((result) => sendResponse(result));
+    return true;
+  }
+
+  if (msg?.type === 'get_upload_status') {
+    // The toast asks while it shows "Sending…", rather than trusting that an
+    // 'autosend_resolved' message will reach it: a page that navigated, or a
+    // worker that stopped mid-send, used to leave it waiting forever. A
+    // countdown found overdue is resolved here and now.
+    get(SESSIONS, msg.recordingId).then((session) => {
+      const now = Date.now();
+      const isOverdue = session?.upload?.status === 'countdown' && now > (session.upload.sendAt ?? 0);
+      if (isOverdue) resolveCountdown(msg.recordingId, 'timeout').catch(() => {});
+      sendResponse(getCountdownResult(session, now));
+    });
+    return true;
+  }
+
+  if (msg?.type === 'backfill') {
+    // "Send unsent" in the popup. Runs on in the background if the popup
+    // closes; progress is in chrome.storage.session under `backfill`.
+    backfill().then((result) => sendResponse(result));
     return true;
   }
 

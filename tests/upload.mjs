@@ -10,7 +10,12 @@
  */
 import {
   exportJson, uploadFilename, nextUploadState, RETRY_DELAYS_MS, shouldAutoSend, AUTO_SEND_COUNTDOWN_MS,
+  getShownUpload, getCountdownResult, isUnsent, STUCK_AFTER_MS, ABANDONED_AFTER_MS,
 } from '../extension/background/upload-core.js';
+import { getRecordedFields } from '../extension/background/recorder.js';
+
+const now = 1_700_000_000_000;
+const done = (upload) => ({ finished: true, lastAt: now - 1000, origin: {}, upload });
 
 const cases = [
   // exportJson: the same string both the download and the upload send.
@@ -74,6 +79,57 @@ const cases = [
   [10_000, AUTO_SEND_COUNTDOWN_MS, 'the auto-send countdown is ten seconds'],
   [false, shouldAutoSend({ finished: true, upload: { status: 'countdown', sendAt: Date.now() + 5000 } }, 5, { autoSend: true }),
     'never re-arms a recording already counting down'],
+
+  // getShownUpload: a 'sending' or 'countdown' nothing will come back to
+  // finish must read as failed, or the Send button is hidden for good.
+  ['sending', getShownUpload({ status: 'sending', at: now - 5000 }, now).status,
+    'a send in progress is shown as sending'],
+  ['failed', getShownUpload({ status: 'sending', at: now - STUCK_AFTER_MS - 1 }, now).status,
+    'a send stuck past the limit is shown as failed, so it can be retried'],
+  ['countdown', getShownUpload({ status: 'countdown', sendAt: now + 5000 }, now).status,
+    'a running countdown is shown as counting down'],
+  ['failed', getShownUpload({ status: 'countdown', sendAt: now - STUCK_AFTER_MS - 1 }, now).status,
+    'a countdown long overdue is shown as failed'],
+  [null, getShownUpload(undefined, now), 'no upload is no upload'],
+
+  // getCountdownResult: what the toast shows once it stops waiting.
+  ['discarded', getCountdownResult(undefined, now).outcome, 'a recording that is gone was discarded'],
+  ['sent', getCountdownResult(done({ status: 'sent' }), now).outcome, 'a sent recording reads as sent'],
+  ['boom', getCountdownResult(done({ status: 'failed', error: 'boom' }), now).error,
+    'a failed send carries its error to the toast'],
+  ['failed', getCountdownResult(done(undefined), now).outcome,
+    'a countdown that vanished reads as not sent, never as waiting forever'],
+  [null, getCountdownResult(done({ status: 'countdown', sendAt: now + 1000 }), now),
+    'still counting down: keep waiting'],
+  [null, getCountdownResult(done({ status: 'sending', at: now }), now), 'still sending: keep waiting'],
+
+  // isUnsent: what "Send unsent" picks up.
+  [true, isUnsent(done(undefined), 5, now), 'a finished game never sent is unsent'],
+  [true, isUnsent(done({ status: 'failed' }), 5, now), 'a failed send is unsent'],
+  [true, isUnsent(done({ status: 'sending', at: now - STUCK_AFTER_MS - 1 }), 5, now),
+    'a send stuck at sending is unsent'],
+  [false, isUnsent(done({ status: 'sent' }), 5, now), 'a sent game is not'],
+  [false, isUnsent(done({ status: 'sending', at: now }), 5, now), 'a game being sent right now is not'],
+  [false, isUnsent(done({ status: 'countdown', sendAt: now + 5000 }), 5, now),
+    'a game counting down is left to its countdown'],
+  [false, isUnsent(done(undefined), 0, now), 'an empty recording is never sent'],
+  [false, isUnsent({ ...done(undefined), origin: null }, 5, now),
+    'a recording with no anchoring snapshot cannot build, so is not sent'],
+  [false, isUnsent({ ...done(undefined), buildError: 'unknown patch operation' }, 5, now),
+    'a recording whose build failed waits until it builds'],
+  [false, isUnsent({ finished: false, lastAt: now - 60_000, origin: {} }, 5, now), 'a match still being played is not'],
+  [true, isUnsent({ finished: false, lastAt: now - ABANDONED_AFTER_MS - 1, origin: {} }, 5, now),
+    'an open recording silent for half an hour ended unnoticed, and is unsent'],
+
+  // getRecordedFields: a frame writes back only what it found, never the
+  // upload or the closed flag that other writers own.
+  [false, 'upload' in getRecordedFields({ lastAt: 1, upload: { status: 'sending' } }),
+    'a frame never writes back the upload it read'],
+  [false, 'finished' in getRecordedFields({ lastAt: 1, finished: false }),
+    'a frame never writes back the closed flag it read'],
+  [false, 'buildError' in getRecordedFields({ lastAt: 1, buildError: 'x' }),
+    'a frame never writes back a build verdict'],
+  [7, getRecordedFields({ lastAt: 7, upload: {} }).lastAt, 'a frame does write what it found'],
 ];
 
 let failed = 0;

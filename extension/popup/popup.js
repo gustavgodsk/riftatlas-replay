@@ -1,3 +1,5 @@
+import { STUCK_AFTER_MS } from '../background/upload-core.js';
+
 const list = document.getElementById('list');
 const search = document.getElementById('search');
 const count = document.getElementById('count');
@@ -81,11 +83,9 @@ document.getElementById('save-upload-settings').onclick = async () => {
 function uploadStatusEl(row) {
   const el = document.createElement('div');
   el.className = 'upload';
-  // A 'sending' the background never overwrote (MV3 killed the worker mid-fetch)
-  // would otherwise hide the button for good; after two minutes, offer a retry.
-  const upload = row.upload?.status === 'sending' && Date.now() - (row.upload.at ?? 0) > 120_000
-    ? { status: 'failed', error: 'Upload interrupted - click to retry' }
-    : row.upload;
+  // Already shown as 'failed' by the background when it is stuck in
+  // 'sending' or 'countdown' (getShownUpload), so the Retry button comes back.
+  const upload = row.upload;
 
   if (upload?.status === 'sent') {
     const badge = tag('sent', 'sent');
@@ -139,6 +139,59 @@ function uploadStatusEl(row) {
     }));
   return el;
 }
+
+// --- Send unsent (backfill) -------------------------------------------------
+//
+// Sends every finished recording the site does not have yet, oldest first.
+// It runs in the background, so the popup can close; progress arrives through
+// chrome.storage.session.
+
+const backfillButton = document.getElementById('backfill');
+const backfillStatus = document.getElementById('backfill-status');
+let backfillProgress = null;
+
+function isBackfillRunning() {
+  return backfillProgress?.running === true
+    && Date.now() - (backfillProgress.at ?? 0) < STUCK_AFTER_MS;
+}
+
+function renderBackfill() {
+  if (isBackfillRunning()) {
+    const { total, sent, failed } = backfillProgress;
+    backfillButton.hidden = false;
+    backfillButton.disabled = true;
+    backfillButton.textContent = `Sending ${Math.min(sent + failed + 1, total)}/${total}…`;
+    return;
+  }
+  const unsent = allRows.filter((row) => row.unsent).length;
+  backfillButton.disabled = false;
+  backfillButton.hidden = !currentSiteUrl || unsent === 0;
+  backfillButton.textContent = `Send unsent (${unsent})`;
+}
+
+function getBackfillSummary(result) {
+  if (result?.total === undefined) return result?.error ?? 'failed';
+  const failures = result.failed ? `, ${result.failed} failed - ${result.error}` : '';
+  return `${result.sent} of ${result.total} sent${failures}`;
+}
+
+backfillButton.onclick = async () => {
+  backfillStatus.textContent = '';
+  const result = await send({ type: 'backfill' });
+  backfillStatus.textContent = getBackfillSummary(result);
+  refresh();
+};
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'session' || !changes.backfill) return;
+  backfillProgress = changes.backfill.newValue ?? null;
+  refresh();
+});
+
+chrome.storage.session.get('backfill').then(({ backfill }) => {
+  backfillProgress = backfill ?? null;
+  renderBackfill();
+}).catch(() => {});
 
 /**
  * How the match ended, in words. 'series' is the odd one: a best-of-three game
@@ -249,6 +302,7 @@ function render() {
   const query = search.value;
   const rows = allRows.filter((r) => matches(r, query));
 
+  renderBackfill();
   search.hidden = allRows.length < 6;   // pointless chrome on a short list
   count.hidden = !query;
   count.textContent = `${rows.length} of ${allRows.length} recordings`;
@@ -420,5 +474,5 @@ search.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && search.value) { e.preventDefault(); search.value = ''; render(); }
 });
 
-loadUploadSettings();
+loadUploadSettings().then(renderBackfill);
 refresh();
